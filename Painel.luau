@@ -1,52 +1,39 @@
 --==================================================
--- ROUBE OU MORRA | DEVELOPMENT PANEL
--- Linguagem: Luau
+-- ROUBE OU MORRA | PAINEL DE TESTE - tales.helpers
+-- Luau | UI Premium
 --==================================================
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
 local Player = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild("PlayerGui")
 
--- CONFIGURAÇÕES
 local Config = {
-    BagLimit = 80,
-
-    Rarities = {
-        "Secreto",
-        "Lendário",
-        "Místico",
-        "Raro",
-        "Incomum",
-        "Comum"
-    },
-
-    Maps = {
-        "Hospital"
-    }
+	BagLimit = 80,
+	Rarities = {"Secreto","Lendário","Místico","Raro","Incomum","Comum"},
+	Maps = {"Hospital"}
 }
 
 local States = {}
-
 local OriginalLighting = {
-    Brightness = Lighting.Brightness,
-    ClockTime = Lighting.ClockTime,
-    GlobalShadows = Lighting.GlobalShadows
+	Brightness = Lighting.Brightness,
+	ClockTime = Lighting.ClockTime,
+	GlobalShadows = Lighting.GlobalShadows
 }
 
--- CORES
 local Colors = {
-    Background = Color3.fromRGB(15, 17, 23),
-    Sidebar = Color3.fromRGB(20, 23, 31),
-    Panel = Color3.fromRGB(27, 30, 40),
-    Button = Color3.fromRGB(37, 41, 53),
-    Accent = Color3.fromRGB(90, 125, 255),
-    Green = Color3.fromRGB(45, 175, 110),
-    Red = Color3.fromRGB(210, 65, 75),
-    White = Color3.fromRGB(245, 245, 250),
-    Gray = Color3.fromRGB(145, 150, 165)
+	Background = Color3.fromRGB(13,15,21),
+	Sidebar = Color3.fromRGB(18,20,28),
+	Panel = Color3.fromRGB(25,28,38),
+	Button = Color3.fromRGB(35,39,52),
+	Accent = Color3.fromRGB(90,125,255),
+	Green = Color3.fromRGB(45,175,110),
+	Red = Color3.fromRGB(210,65,75),
+	White = Color3.fromRGB(245,245,250),
+	Gray = Color3.fromRGB(145,150,165)
 }
 
 -- GUI
@@ -56,120 +43,113 @@ GUI.ResetOnSpawn = false
 GUI.DisplayOrder = 999
 GUI.Parent = PlayerGui
 
--- JANELA PRINCIPAL
 local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(650, 440)
-Main.Position = UDim2.new(0.5, -325, 0.5, -220)
+Main.Size = UDim2.fromOffset(680, 460)
+Main.Position = UDim2.new(0.5,-340,0.5,-230)
 Main.BackgroundColor3 = Colors.Background
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.Parent = GUI
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0,14)
+local Stroke = Instance.new("UIStroke")
+Stroke.Color = Color3.fromRGB(55,60,80)
+Stroke.Thickness = 1
+Stroke.Parent = Main
 
-Instance.new("UICorner", Main).CornerRadius =
-    UDim.new(0, 12)
+-- Animação de entrada
+Main.Size = UDim2.fromOffset(0,0)
+TweenService:Create(Main, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(680,460)}):Play()
 
-local MainStroke = Instance.new("UIStroke")
-MainStroke.Color = Color3.fromRGB(55, 60, 80)
-MainStroke.Thickness = 1
-MainStroke.Parent = Main
-
--- ARRASTAR JANELA
-local dragging = false
-local dragStart
-local startPosition
-
+-- Arrastar
+local dragging, dragStart, startPos = false, nil, nil
 Main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-
-        dragging = true
-        dragStart = input.Position
-        startPosition = Main.Position
-    end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+	end
 end)
-
 UIS.InputChanged:Connect(function(input)
-    if dragging and (
-        input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch
-    ) then
-
-        local delta = input.Position - dragStart
-
-        Main.Position = UDim2.new(
-            startPosition.X.Scale,
-            startPosition.X.Offset + delta.X,
-            startPosition.Y.Scale,
-            startPosition.Y.Offset + delta.Y
-        )
-    end
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
 end)
-
 UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end)
 
--- CABEÇALHO
+-- Header
 local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 55)
+Header.Size = UDim2.new(1,0,0,58)
 Header.BackgroundColor3 = Colors.Sidebar
 Header.BorderSizePixel = 0
 Header.Parent = Main
 
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -120, 1, 0)
-Title.Position = UDim2.fromOffset(18, 0)
+Title.Size = UDim2.new(1,-130,1,0)
+Title.Position = UDim2.fromOffset(18,0)
 Title.BackgroundTransparency = 1
 Title.Text = "ROUBE OU MORRA"
 Title.TextColor3 = Colors.White
-Title.TextSize = 19
+Title.TextSize = 20
 Title.Font = Enum.Font.GothamBold
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = Header
 
-local Minimize = Instance.new("TextButton")
-Minimize.Size = UDim2.fromOffset(38, 34)
-Minimize.Position = UDim2.new(1, -48, 0, 10)
-Minimize.BackgroundColor3 = Colors.Button
-Minimize.Text = "—"
-Minimize.TextColor3 = Colors.White
-Minimize.TextSize = 22
-Minimize.Font = Enum.Font.GothamBold
-Minimize.Parent = Header
+local SubTitle = Instance.new("TextLabel")
+SubTitle.Size = UDim2.new(1,-130,0,16)
+SubTitle.Position = UDim2.fromOffset(18,34)
+SubTitle.BackgroundTransparency = 1
+SubTitle.Text = "Painel de Teste Autorizado"
+SubTitle.TextColor3 = Colors.Gray
+SubTitle.TextSize = 11
+SubTitle.Font = Enum.Font.Gotham
+SubTitle.TextXAlignment = Enum.TextXAlignment.Left
+SubTitle.Parent = Header
 
-Instance.new("UICorner", Minimize).CornerRadius =
-    UDim.new(0, 7)
+local function HeaderBtn(text, x)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(38,34)
+	b.Position = UDim2.new(1, x, 0, 12)
+	b.BackgroundColor3 = Colors.Button
+	b.Text = text
+	b.TextColor3 = Colors.White
+	b.TextSize = 18
+	b.Font = Enum.Font.GothamBold
+	b.Parent = Header
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0,7)
+	return b
+end
+local Minimize = HeaderBtn("—", -92)
+local Close = HeaderBtn("X", -48)
+Close.BackgroundColor3 = Colors.Red
+Close.MouseButton1Click:Connect(function() GUI:Destroy() end)
 
--- MENU LATERAL
+-- Sidebar
 local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, 165, 1, -55)
-Sidebar.Position = UDim2.fromOffset(0, 55)
+Sidebar.Size = UDim2.new(0,170,1,-58)
+Sidebar.Position = UDim2.fromOffset(0,58)
 Sidebar.BackgroundColor3 = Colors.Sidebar
 Sidebar.BorderSizePixel = 0
 Sidebar.Parent = Main
-
 local SideLayout = Instance.new("UIListLayout")
-SideLayout.Padding = UDim.new(0, 8)
+SideLayout.Padding = UDim.new(0,8)
 SideLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-SideLayout.SortOrder = Enum.SortOrder.LayoutOrder
 SideLayout.Parent = Sidebar
+local SidePad = Instance.new("UIPadding")
+SidePad.PaddingTop = UDim.new(0,14)
+SidePad.Parent = Sidebar
 
-local SidePadding = Instance.new("UIPadding")
-SidePadding.PaddingTop = UDim.new(0, 15)
-SidePadding.Parent = Sidebar
-
--- CONTEÚDO
+-- Content
 local Content = Instance.new("Frame")
-Content.Size = UDim2.new(1, -180, 1, -70)
-Content.Position = UDim2.fromOffset(175, 65)
+Content.Size = UDim2.new(1,-185,1,-73)
+Content.Position = UDim2.fromOffset(178,68)
 Content.BackgroundTransparency = 1
 Content.Parent = Main
 
 local PageTitle = Instance.new("TextLabel")
-PageTitle.Size = UDim2.new(1, 0, 0, 35)
+PageTitle.Size = UDim2.new(1,0,0,32)
 PageTitle.BackgroundTransparency = 1
 PageTitle.Text = "Dashboard"
 PageTitle.TextColor3 = Colors.White
@@ -179,10 +159,10 @@ PageTitle.TextXAlignment = Enum.TextXAlignment.Left
 PageTitle.Parent = Content
 
 local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, 0, 0, 25)
-Status.Position = UDim2.new(0, 0, 1, -25)
+Status.Size = UDim2.new(1,0,0,22)
+Status.Position = UDim2.new(0,0,1,-22)
 Status.BackgroundTransparency = 1
-Status.Text = "Sistema iniciado"
+Status.Text = "Sistema iniciado • tales.helpers"
 Status.TextColor3 = Colors.Green
 Status.Font = Enum.Font.Gotham
 Status.TextSize = 12
@@ -190,238 +170,184 @@ Status.TextXAlignment = Enum.TextXAlignment.Left
 Status.Parent = Content
 
 local Pages = {}
-
 local function CreatePage(name)
-    local Page = Instance.new("ScrollingFrame")
-    Page.Name = name
-    Page.Size = UDim2.new(1, 0, 1, -75)
-    Page.Position = UDim2.fromOffset(0, 40)
-    Page.BackgroundTransparency = 1
-    Page.BorderSizePixel = 0
-    Page.ScrollBarThickness = 3
-    Page.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    Page.CanvasSize = UDim2.new()
-    Page.Visible = false
-    Page.Parent = Content
-
-    local Layout = Instance.new("UIListLayout")
-    Layout.Padding = UDim.new(0, 8)
-    Layout.Parent = Page
-
-    Pages[name] = Page
-    return Page
+	local p = Instance.new("ScrollingFrame")
+	p.Name = name
+	p.Size = UDim2.new(1,0,1,-70)
+	p.Position = UDim2.fromOffset(0,38)
+	p.BackgroundTransparency = 1
+	p.BorderSizePixel = 0
+	p.ScrollBarThickness = 3
+	p.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	p.CanvasSize = UDim2.new()
+	p.Visible = false
+	p.Parent = Content
+	local l = Instance.new("UIListLayout")
+	l.Padding = UDim.new(0,8)
+	l.Parent = p
+	Pages[name] = p
+	return p
 end
 
-local function CreateSection(page, name)
-    local Label = Instance.new("TextLabel")
-    Label.Size = UDim2.new(1, -5, 0, 30)
-    Label.BackgroundTransparency = 1
-    Label.Text = name
-    Label.TextColor3 = Colors.Accent
-    Label.TextSize = 13
-    Label.Font = Enum.Font.GothamBold
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.Parent = page
+local function Section(page, name)
+	local lb = Instance.new("TextLabel")
+	lb.Size = UDim2.new(1,-5,0,28)
+	lb.BackgroundTransparency = 1
+	lb.Text = name
+	lb.TextColor3 = Colors.Accent
+	lb.TextSize = 13
+	lb.Font = Enum.Font.GothamBold
+	lb.TextXAlignment = Enum.TextXAlignment.Left
+	lb.Parent = page
 end
 
-local function CreateButton(page, name, callback)
-    local Button = Instance.new("TextButton")
-    Button.Size = UDim2.new(1, -8, 0, 39)
-    Button.BackgroundColor3 = Colors.Button
-    Button.TextColor3 = Colors.White
-    Button.Text = name
-    Button.TextSize = 12
-    Button.Font = Enum.Font.GothamSemibold
-    Button.Parent = page
-
-    Instance.new("UICorner", Button).CornerRadius =
-        UDim.new(0, 7)
-
-    Button.MouseButton1Click:Connect(callback)
-
-    return Button
+local function Button(page, name, cb)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1,-8,0,40)
+	b.BackgroundColor3 = Colors.Button
+	b.TextColor3 = Colors.White
+	b.Text = name
+	b.TextSize = 12
+	b.Font = Enum.Font.GothamSemibold
+	b.Parent = page
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0,8)
+	b.MouseButton1Click:Connect(function()
+		TweenService:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = Colors.Accent}):Play()
+		task.delay(0.12, function() TweenService:Create(b, TweenInfo.new(0.2), {BackgroundColor3 = Colors.Button}):Play() end)
+		if cb then cb() end
+	end)
+	return b
 end
 
-local function CreateToggle(page, key, name, callback)
-    States[key] = false
-
-    local Button = CreateButton(
-        page,
-        name .. "     OFF",
-        function()
-            States[key] = not States[key]
-
-            Button.Text = name ..
-                (States[key] and "     ON" or "     OFF")
-
-            Button.BackgroundColor3 = States[key]
-                and Colors.Green
-                or Colors.Button
-
-            if callback then
-                callback(States[key])
-            end
-        end
-    )
-
-    return Button
+local function Toggle(page, key, name, cb)
+	States[key] = false
+	local b = Button(page, name.."  •  OFF", nil)
+	b.MouseButton1Click:Connect(function()
+		States[key] = not States[key]
+		b.Text = name.."  •  "..(States[key] and "ON" or "OFF")
+		TweenService:Create(b, TweenInfo.new(0.2), {BackgroundColor3 = States[key] and Colors.Green or Colors.Button}):Play()
+		Status.Text = name.." "..(States[key] and "ativado" or "desativado")
+		if cb then cb(States[key]) end
+	end)
+	return b
 end
 
--- PÁGINAS
+-- Páginas separadas
 local Dashboard = CreatePage("Dashboard")
 local ESP = CreatePage("ESP")
-local Farm = CreatePage("Farm")
-local Settings = CreatePage("Settings")
+local Coleta = CreatePage("Coleta")
+local Mapas = CreatePage("Mapas")
+local Mochila = CreatePage("Mochila")
+local Visual = CreatePage("Visual")
+local Estamina = CreatePage("Estamina")
 
 -- DASHBOARD
-CreateSection(Dashboard, "INFORMAÇÕES")
-
-CreateButton(Dashboard, "Atualizar jogadores", function()
-    Status.Text = "Jogadores: " .. #Players:GetPlayers()
-end)
-
-CreateButton(Dashboard, "Verificar versão", function()
-    Status.Text = "ROM Panel - Luau"
-end)
+Section(Dashboard, "INFORMAÇÕES")
+Button(Dashboard, "Atualizar jogadores", function() Status.Text = "Jogadores online: "..#Players:GetPlayers() end)
+Button(Dashboard, "Verificar versão", function() Status.Text = "ROM Panel v2 • tales.helpers" end)
 
 -- ESP
-CreateSection(ESP, "IDENTIFICAÇÃO VISUAL")
+Section(ESP, "IDENTIFICAÇÃO VISUAL")
+Toggle(ESP, "ESPPlayers", "ESP Players - Azul", function(on) Status.Text = "ESP Players "..(on and "ativado - aguardando dados do servidor" or "desativado") end)
+Toggle(ESP, "ESPMonster", "ESP Monstro - Vermelho", function(on) Status.Text = "ESP Monstro "..(on and "ativado - aguardando dados do servidor" or "desativado") end)
+Toggle(ESP, "ESPItems", "ESP Itens e raridades", function(on) Status.Text = "ESP Itens "..(on and "ativado" or "desativado") end)
 
-CreateButton(ESP, "ESP Players - Azul", function()
-    Status.Text = "Integração de ESP requer dados autorizados"
-end)
-
-CreateButton(ESP, "ESP Monstro - Vermelho", function()
-    Status.Text = "Integração de ESP requer dados autorizados"
-end)
-
-CreateButton(ESP, "ESP Itens e raridades", function()
-    Status.Text = "Integração de itens pendente"
-end)
-
-CreateSection(ESP, "RARIDADES")
-
+-- COLETA
+Section(Coleta, "AUTO COLETA")
+Toggle(Coleta, "AutoCollect", "Auto Collect", function(on) Status.Text = "Auto Collect "..(on and "ativado" or "desativado") end)
+Toggle(Coleta, "AutoFarm", "Auto Farm Inteligente", function(on) Status.Text = "Auto Farm "..(on and "ativado" or "desativado") end)
+Toggle(Coleta, "ExitFinder", "Localizador de saída", function(on) Status.Text = "Localizador "..(on and "ativado" or "desativado") end)
+Section(Coleta, "PRIORIDADE POR RARIDADE")
 for _, rarity in ipairs(Config.Rarities) do
-    CreateButton(ESP, rarity, function()
-        Status.Text = "Raridade selecionada: " .. rarity
-    end)
+	Button(Coleta, rarity, function() Status.Text = "Prioridade: "..rarity end)
 end
 
--- FARM
-CreateSection(Farm, "AUTO FARM")
-
-CreateButton(Farm, "Auto Farm Inteligente", function()
-    Status.Text = "Integração com jogo pendente"
-end)
-
-CreateButton(Farm, "Auto Collect", function()
-    Status.Text = "Integração com coleta pendente"
-end)
-
-CreateSection(Farm, "MAPAS")
-
-local SelectedMap = nil
-
+-- MAPAS
+Section(Mapas, "SELECIONAR MAPA")
 for _, map in ipairs(Config.Maps) do
-    CreateButton(Farm, "Selecionar " .. map, function()
-        SelectedMap = map
-        Status.Text = "Mapa: " .. map
-    end)
+	Button(Mapas, "Selecionar "..map, function() Status.Text = "Mapa selecionado: "..map end)
 end
 
-CreateSection(Farm, "MONITORAMENTO")
-
-local CurrentWeight = 0
-local MaximumWeight = 100
-
-CreateButton(Farm, "Verificar mochila", function()
-    local percentage = CurrentWeight / MaximumWeight * 100
-
-    Status.Text = string.format(
-        "Mochila: %.1f%%",
-        percentage
-    )
-
-    if percentage >= Config.BagLimit then
-        Status.Text = "Limite de 80% atingido"
-    end
+-- MOCHILA
+Section(Mochila, "MONITORAMENTO")
+local cur, max = 0, 100
+local BagBarBG = Instance.new("Frame")
+BagBarBG.Size = UDim2.new(1,-8,0,16)
+BagBarBG.BackgroundColor3 = Colors.Button
+BagBarBG.Parent = Mochila
+Instance.new("UICorner", BagBarBG).CornerRadius = UDim.new(0,8)
+local BagBar = Instance.new("Frame")
+BagBar.Size = UDim2.new(0,0,1,0)
+BagBar.BackgroundColor3 = Colors.Green
+BagBar.Parent = BagBarBG
+Instance.new("UICorner", BagBar).CornerRadius = UDim.new(0,8)
+Button(Mochila, "Verificar mochila", function()
+	local pct = cur / max * 100
+	TweenService:Create(BagBar, TweenInfo.new(0.4), {Size = UDim2.new(pct/100,0,1,0)}):Play()
+	if pct >= Config.BagLimit then Status.Text = "LIMITE DE 80% ATINGIDO" else Status.Text = string.format("Mochila: %.1f%%", pct) end
 end)
 
--- CONFIGURAÇÕES
-CreateSection(Settings, "ILUMINAÇÃO")
-
-CreateToggle(Settings, "Brightness", "Brilho máximo", function(enabled)
-    if enabled then
-        Lighting.Brightness = 3
-        Lighting.ClockTime = 14
-        Lighting.GlobalShadows = false
-    else
-        Lighting.Brightness = OriginalLighting.Brightness
-        Lighting.ClockTime = OriginalLighting.ClockTime
-        Lighting.GlobalShadows = OriginalLighting.GlobalShadows
-    end
+-- VISUAL
+Section(Visual, "ILUMINAÇÃO")
+Toggle(Visual, "Brightness", "Brilho máximo", function(on)
+	if on then Lighting.Brightness = 3 Lighting.ClockTime = 14 Lighting.GlobalShadows = false
+	else Lighting.Brightness = OriginalLighting.Brightness Lighting.ClockTime = OriginalLighting.ClockTime Lighting.GlobalShadows = OriginalLighting.GlobalShadows end
 end)
+Section(Visual, "AMBIENTE")
+Toggle(Visual, "Doors", "Portas e dutos", function(on) Status.Text = "Portas e dutos "..(on and "ativado - modo visual" or "desativado") end)
 
-CreateSection(Settings, "OUTROS")
+-- ESTAMINA
+Section(Estamina, "ESTAMINA")
+Toggle(Estamina, "StamPlayer", "Estamina - Jogador", function(on) Status.Text = "Estamina Jogador "..(on and "ativada" or "desativada") end)
+Toggle(Estamina, "StamMonster", "Estamina - Monstro", function(on) Status.Text = "Estamina Monstro "..(on and "ativada" or "desativada") end)
 
-CreateButton(Settings, "Portas e dutos", function()
-    Status.Text = "Integração visual pendente"
-end)
+-- Rodapé
+local Footer = Instance.new("TextLabel")
+Footer.Size = UDim2.new(1,0,0,18)
+Footer.Position = UDim2.new(0,0,1,-18)
+Footer.BackgroundTransparency = 1
+Footer.Text = "tales.helpers"
+Footer.TextColor3 = Colors.Gray
+Footer.TextSize = 11
+Footer.Font = Enum.Font.Gotham
+Footer.Parent = Main
 
-CreateButton(Settings, "Estamina do jogador", function()
-    Status.Text = "Integração com sistema de estamina pendente"
-end)
-
-CreateButton(Settings, "Estamina do monstro", function()
-    Status.Text = "Integração com sistema de estamina pendente"
-end)
-
--- NAVEGAÇÃO
-local function CreateTab(name, page)
-    local Button = Instance.new("TextButton")
-
-    Button.Size = UDim2.new(1, -16, 0, 38)
-    Button.BackgroundColor3 = Colors.Button
-    Button.Text = name
-    Button.TextColor3 = Colors.White
-    Button.TextSize = 12
-    Button.Font = Enum.Font.GothamSemibold
-    Button.Parent = Sidebar
-
-    Instance.new("UICorner", Button).CornerRadius =
-        UDim.new(0, 7)
-
-    Button.MouseButton1Click:Connect(function()
-        for pageName, object in pairs(Pages) do
-            object.Visible = object == page
-        end
-
-        PageTitle.Text = name
-        Status.Text = "Categoria: " .. name
-    end)
+-- Navegação
+local function Tab(name, page)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1,-16,0,38)
+	b.BackgroundColor3 = Colors.Button
+	b.Text = name
+	b.TextColor3 = Colors.White
+	b.TextSize = 12
+	b.Font = Enum.Font.GothamSemibold
+	b.Parent = Sidebar
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0,7)
+	b.MouseButton1Click:Connect(function()
+		for _, obj in pairs(Pages) do obj.Visible = false end
+		page.Visible = true
+		PageTitle.Text = name
+		Status.Text = "Categoria: "..name
+		for _, other in pairs(Sidebar:GetChildren()) do if other:IsA("TextButton") then other.BackgroundColor3 = Colors.Button end end
+		b.BackgroundColor3 = Colors.Accent
+	end)
 end
-
-CreateTab("Dashboard", Dashboard)
-CreateTab("ESP", ESP)
-CreateTab("Auto Farm", Farm)
-CreateTab("Configurações", Settings)
-
+Tab("Dashboard", Dashboard)
+Tab("ESP", ESP)
+Tab("Coleta", Coleta)
+Tab("Mapas", Mapas)
+Tab("Mochila", Mochila)
+Tab("Visual", Visual)
+Tab("Estamina", Estamina)
 Dashboard.Visible = true
 
--- MINIMIZAR / RESTAURAR
 local minimized = false
-
 Minimize.MouseButton1Click:Connect(function()
-    minimized = not minimized
-
-    Sidebar.Visible = not minimized
-    Content.Visible = not minimized
-
-    Main.Size = minimized
-        and UDim2.fromOffset(250, 55)
-        or UDim2.fromOffset(650, 440)
-
-    Minimize.Text = minimized and "+" or "—"
+	minimized = not minimized
+	Sidebar.Visible = not minimized
+	Content.Visible = not minimized
+	TweenService:Create(Main, TweenInfo.new(0.25), {Size = minimized and UDim2.fromOffset(280,58) or UDim2.fromOffset(680,460)}):Play()
+	Minimize.Text = minimized and "+" or "—"
 end)
 
-print("ROUBE OU MORRA - Interface carregada")
+print("ROUBE OU MORRA - Painel tales.helpers carregado")
