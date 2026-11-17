@@ -1,88 +1,85 @@
-
 --==================================================
--- ROUBE OU MORRA V9
+-- ROUBE OU MORRA V9 - CORRIGIDO
 -- Mod Menu | LocalScript
--- Base V5 | Funções preservadas
+-- ESP Players azul | ESP Monstros vermelho
 --==================================================
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local old = playerGui:FindFirstChild("RoubeOuMorraV8")
-if old then old:Destroy() end
+local gui
 
-local old = playerGui:FindFirstChild("RoubeOuMorraV9")
-if old then old:Destroy() end
+for _, old in ipairs(playerGui:GetChildren()) do
+    if old.Name == "RoubeOuMorraV8" or old.Name == "RoubeOuMorraV9" then
+        old:Destroy()
+    end
+end
 
 local states = {}
 local highlights = {}
 local tags = {}
 local ductESP = {}
-local hidden = {}
-local prompts = {}
 local itemESP = {}
 local rarityESP = {}
+local hidden = {}
+local prompts = {}
 
-local function norm(v)
-    return string.lower(tostring(v or ""))
-        :gsub("_", " ")
-        :gsub("%-", " ")
-        :gsub("%s+", " ")
-        :gsub("^%s*(.-)%s*$", "%1")
+local staminaGeneration = 0
+local farmGeneration = 0
+local destroyed = false
+
+local function norm(value)
+    value = tostring(value or ""):lower()
+    value = value:gsub("[%s_%-]", "")
+    return value
 end
 
---==================================================
--- MONSTROS
---==================================================
-
 local monsterNames = {
-    ["the locust"] = true,
+    ["thelocust"] = true,
     ["locust"] = true,
-    ["the hollow"] = true,
+    ["thehollow"] = true,
     ["hollow"] = true,
-    ["the rictus"] = true,
+    ["therictus"] = true,
     ["rictus"] = true,
-    ["the wendell"] = true,
+    ["thewendell"] = true,
     ["wendell"] = true,
     ["mimic"] = true,
-    ["the mimic"] = true
+    ["themimic"] = true
 }
 
+local function playerFromCharacter(model)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character == model then
+            return plr
+        end
+    end
+    return nil
+end
+
 local function isMonster(model, plr)
-    if not model or plr then return false end
+    if not model or not model:IsA("Model") or plr then
+        return false
+    end
 
     if model:GetAttribute("IsMonster") == true
-    or model:GetAttribute("Monster") == true then
+        or model:GetAttribute("Monster") == true then
         return true
     end
 
-    local names = {
+    local namesToCheck = {
         model.Name,
         model:GetAttribute("MonsterName"),
         model:GetAttribute("Role"),
         model:GetAttribute("EntityType")
     }
 
-    for _, name in ipairs(names) do
-        local n = norm(name)
-
-        if monsterNames[n]
-        or n:find("monster", 1, true)
-        or n:find("monstro", 1, true)
-        or n:find("entity", 1, true) then
-            return true
-        end
-    end
-
-    local team = plr and plr.Team
-    if team then
-        local n = norm(team.Name)
-        if n:find("monster", 1, true)
-        or n:find("monstro", 1, true) then
+    for _, name in ipairs(namesToCheck) do
+        if name and monsterNames[norm(name)] then
             return true
         end
     end
@@ -90,100 +87,94 @@ local function isMonster(model, plr)
     return false
 end
 
-local function playerFromCharacter(model)
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character == model then
-            return p
-        end
+local function removeEntry(tbl, model)
+    local entry = tbl[model]
+    if entry then
+        pcall(function()
+            entry:Destroy()
+        end)
+        tbl[model] = nil
     end
 end
 
 local function clearModel(model)
-    if highlights[model] then
-        highlights[model]:Destroy()
-        highlights[model] = nil
-    end
+    removeEntry(highlights, model)
+    removeEntry(tags, model)
+end
 
-    if tags[model] then
-        tags[model]:Destroy()
-        tags[model] = nil
-    end
+local function makeHighlight(model, color, tableRef)
+    if tableRef[model] then return end
+
+    local h = Instance.new("Highlight")
+    h.Name = "ROM_ESP"
+    h.Adornee = model
+    h.FillColor = color
+    h.OutlineColor = color
+    h.FillTransparency = 0.75
+    h.OutlineTransparency = 0
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = model
+
+    tableRef[model] = h
+end
+
+local function makeNameTag(model, label, color)
+    if tags[model] or not gui then return end
+
+    local adornee = model:FindFirstChild("Head")
+        or model:FindFirstChild("HumanoidRootPart")
+        or model.PrimaryPart
+
+    if not adornee then return end
+
+    local bill = Instance.new("BillboardGui")
+    bill.Name = "ROM_Name"
+    bill.Adornee = adornee
+    bill.Size = UDim2.fromOffset(160, 30)
+    bill.StudsOffset = Vector3.new(0, 3, 0)
+    bill.AlwaysOnTop = true
+    bill.Parent = gui
+
+    local text = Instance.new("TextLabel")
+    text.BackgroundTransparency = 1
+    text.Size = UDim2.fromScale(1, 1)
+    text.Font = Enum.Font.GothamBold
+    text.TextSize = 13
+    text.TextStrokeTransparency = 0.25
+    text.TextColor3 = color
+    text.Text = label
+    text.Parent = bill
+
+    tags[model] = bill
 end
 
 local function applyModel(model)
-    if not model or not model.Parent
-    or not model:IsA("Model")
-    or model == player.Character then
-        return
-    end
+    if not model or not model:IsA("Model") then return end
 
-    local humanoid = model:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
 
     local plr = playerFromCharacter(model)
     local monster = isMonster(model, plr)
 
-    if not plr and not monster then return end
-
     clearModel(model)
 
-    if monster and states["ESP Monstro Vermelho"] then
-        local h = Instance.new("Highlight")
-        h.Name = "MonsterESP"
-        h.Adornee = model
-        h.FillColor = Color3.fromRGB(255, 0, 0)
-        h.OutlineColor = Color3.fromRGB(255, 35, 35)
-        h.FillTransparency = 0.35
-        h.OutlineTransparency = 0
-        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        h.Parent = gui
-        highlights[model] = h
-
-    elseif plr and states["ESP Players"] then
-        local h = Instance.new("Highlight")
-        h.Name = "PlayerESP"
-        h.Adornee = model
-        h.FillColor = Color3.fromRGB(50, 130, 255)
-        h.OutlineColor = Color3.fromRGB(255, 255, 255)
-        h.FillTransparency = 0.65
-        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        h.Parent = gui
-        highlights[model] = h
-    end
-
-    if states["ESP Nome"] then
-        local head = model:FindFirstChild("Head")
-        if not head then
-            head = model:FindFirstChild("HumanoidRootPart")
+    if monster then
+        if states["ESP Monstro Vermelho"] then
+            makeHighlight(model, Color3.fromRGB(255, 35, 35), highlights)
         end
 
-        if head then
-            local tag = Instance.new("BillboardGui")
-            tag.Name = "ESPName"
-            tag.Adornee = head
-            tag.Size = UDim2.fromOffset(180, 30)
-            tag.StudsOffset = Vector3.new(0, 3, 0)
-            tag.AlwaysOnTop = true
-            tag.Parent = gui
+        if states["ESP Nome"] then
+            makeNameTag(model, model.Name, Color3.fromRGB(255, 50, 50))
+        end
 
-            local label = Instance.new("TextLabel")
-            label.Size = UDim2.fromScale(1, 1)
-            label.BackgroundTransparency = 1
+    elseif plr and plr ~= player then
+        if states["ESP Players"] then
+            makeHighlight(model, Color3.fromRGB(40, 140, 255), highlights)
+        end
 
-            -- SOMENTE NOME DE EXIBIÇÃO
-            label.Text = plr and plr.DisplayName
-                or model.Name
-
-            label.TextColor3 = monster
-                and Color3.fromRGB(255, 60, 60)
-                or Color3.new(1, 1, 1)
-
-            label.TextStrokeTransparency = 0.1
-            label.TextScaled = true
-            label.Font = Enum.Font.GothamBold
-            label.Parent = tag
-
-            tags[model] = tag
+        if states["ESP Nome"] then
+            makeNameTag(model, plr.Name, Color3.fromRGB(80, 170, 255))
         end
     end
 end
@@ -197,17 +188,14 @@ local function refreshAll()
         clearModel(model)
     end
 
-    local checked = {}
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= player and p.Character then
-            checked[p.Character] = true
-            applyModel(p.Character)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character then
+            applyModel(plr.Character)
         end
     end
 
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and not checked[obj] then
+        if obj:IsA("Model") and not playerFromCharacter(obj) then
             applyModel(obj)
         end
     end
@@ -217,97 +205,90 @@ end
 -- INTERFACE
 --==================================================
 
-local gui = Instance.new("ScreenGui")
+gui = Instance.new("ScreenGui")
 gui.Name = "RoubeOuMorraV9"
 gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = playerGui
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(285, 450)
-frame.Position = UDim2.new(0.04, 0, 0.2, 0)
-frame.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
-frame.BorderSizePixel = 0
-frame.Parent = gui
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.fromOffset(285, 450)
+main.Position = UDim2.new(0.5, -142, 0.5, -225)
+main.BackgroundColor3 = Color3.fromRGB(17, 17, 22)
+main.BorderSizePixel = 0
+main.Parent = gui
 
-Instance.new("UICorner", frame).CornerRadius =
-    UDim.new(0, 12)
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = main
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(180, 25, 35)
+stroke.Thickness = 1.5
+stroke.Parent = main
 
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 42)
-header.BackgroundColor3 = Color3.fromRGB(180, 20, 35)
+header.BackgroundColor3 = Color3.fromRGB(35, 12, 17)
 header.BorderSizePixel = 0
-header.Parent = frame
+header.Parent = main
 
-Instance.new("UICorner", header).CornerRadius =
-    UDim.new(0, 12)
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 10)
+headerCorner.Parent = header
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -80, 1, 0)
-title.Position = UDim2.fromOffset(10, 0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V9"
-title.TextColor3 = Color3.new(1, 1, 1)
+title.Position = UDim2.fromOffset(12, 0)
+title.Size = UDim2.new(1, -55, 1, 0)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 14
+title.Text = "ROUBE OU MORRA V9"
+title.TextColor3 = Color3.fromRGB(255, 70, 70)
+title.TextSize = 15
+title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = header
 
 local minimize = Instance.new("TextButton")
-minimize.Size = UDim2.fromOffset(38, 38)
-minimize.Position = UDim2.new(1, -42, 0, 2)
-minimize.Text = "—"
+minimize.Size = UDim2.fromOffset(35, 30)
+minimize.Position = UDim2.new(1, -40, 0, 6)
+minimize.BackgroundColor3 = Color3.fromRGB(75, 20, 25)
+minimize.Text = "-"
 minimize.TextColor3 = Color3.new(1, 1, 1)
-minimize.BackgroundTransparency = 1
-minimize.TextSize = 22
+minimize.Font = Enum.Font.GothamBold
+minimize.TextSize = 20
 minimize.Parent = header
 
-local restore = Instance.new("TextButton")
-restore.Size = UDim2.fromOffset(48, 48)
-restore.Position = UDim2.new(0, 15, 0.5, -24)
-restore.Text = "RM"
-restore.TextColor3 = Color3.new(1, 1, 1)
-restore.Font = Enum.Font.GothamBold
-restore.BackgroundColor3 = Color3.fromRGB(180, 20, 35)
-restore.Visible = false
-restore.Parent = gui
+local minCorner = Instance.new("UICorner")
+minCorner.CornerRadius = UDim.new(0, 6)
+minCorner.Parent = minimize
 
-Instance.new("UICorner", restore).CornerRadius =
-    UDim.new(1, 0)
-
-local content = Instance.new("ScrollingFrame")
-content.Position = UDim2.fromOffset(0, 48)
-content.Size = UDim2.new(1, 0, 1, -50)
-content.BackgroundTransparency = 1
-content.BorderSizePixel = 0
-content.ScrollBarThickness = 4
-content.AutomaticCanvasSize = Enum.AutomaticSize.Y
-content.CanvasSize = UDim2.new()
-content.Parent = frame
+local scroll = Instance.new("ScrollingFrame")
+scroll.Position = UDim2.fromOffset(8, 50)
+scroll.Size = UDim2.new(1, -16, 1, -58)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 4
+scroll.CanvasSize = UDim2.new()
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = main
 
 local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0, 7)
-layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-layout.Parent = content
+layout.Padding = UDim.new(0, 6)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = scroll
 
-minimize.MouseButton1Click:Connect(function()
-    frame.Visible = false
-    restore.Visible = true
-end)
-
-restore.MouseButton1Click:Connect(function()
-    frame.Visible = true
-    restore.Visible = false
-end)
-
+-- Arrastar painel com mouse ou toque
 local dragging = false
 local dragStart
 local startPos
 
 header.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
+        or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
-        startPos = frame.Position
+        startPos = main.Position
     end
 end)
 
@@ -317,8 +298,7 @@ UIS.InputChanged:Connect(function(input)
         or input.UserInputType == Enum.UserInputType.Touch
     ) then
         local delta = input.Position - dragStart
-
-        frame.Position = UDim2.new(
+        main.Position = UDim2.new(
             startPos.X.Scale,
             startPos.X.Offset + delta.X,
             startPos.Y.Scale,
@@ -329,413 +309,266 @@ end)
 
 UIS.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
+        or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
 
+local minimized = false
+minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    scroll.Visible = not minimized
+    main.Size = minimized and UDim2.fromOffset(285, 42)
+        or UDim2.fromOffset(285, 450)
+    minimize.Text = minimized and "+" or "-"
+end)
+
 --==================================================
--- ULTRA BRILHO
+-- FUNÇÕES
 --==================================================
 
-local original = {
+local originalLighting = {
     Brightness = Lighting.Brightness,
     ClockTime = Lighting.ClockTime,
-    GlobalShadows = Lighting.GlobalShadows,
-    Ambient = Lighting.Ambient,
-    OutdoorAmbient = Lighting.OutdoorAmbient
+    FogEnd = Lighting.FogEnd,
+    GlobalShadows = Lighting.GlobalShadows
 }
 
-local function setBrightness(v)
-    if v then
+local function setBrightness(enabled)
+    if enabled then
         Lighting.Brightness = 3
         Lighting.ClockTime = 14
+        Lighting.FogEnd = 100000
         Lighting.GlobalShadows = false
-        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
-        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
     else
-        for k, value in pairs(original) do
-            Lighting[k] = value
+        for property, value in pairs(originalLighting) do
+            pcall(function()
+                Lighting[property] = value
+            end)
         end
     end
 end
 
---==================================================
--- STAMINA
---==================================================
-
-local staminaGeneration = 0
-
-local function stamina(v)
+local function setStamina(enabled)
     staminaGeneration += 1
     local generation = staminaGeneration
 
-    if not v then return end
+    if not enabled then return end
 
     task.spawn(function()
-        while generation == staminaGeneration do
-            for _, obj in ipairs(player:GetDescendants()) do
-                if obj:IsA("NumberValue")
-                or obj:IsA("IntValue") then
+        while states["Stamina Infinita"]
+            and staminaGeneration == generation do
 
-                    local n = norm(obj.Name)
-
-                    if n:find("stamina", 1, true) then
-                        local max =
-                            obj:GetAttribute("MaxValue")
-                            or obj:GetAttribute("MaxStamina")
-
-                        if not max then
-                            local parent = obj.Parent
-
-                            if parent then
-                                max = parent:GetAttribute("MaxStamina")
-                            end
-                        end
-
-                        obj.Value = max or 100000
+            local character = player.Character
+            if character then
+                for _, obj in ipairs(character:GetDescendants()) do
+                    if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
+                        and norm(obj.Name):find("stamina") then
+                        obj.Value = 100
                     end
                 end
             end
 
-            task.wait(0.1)
+            task.wait(0.25)
         end
     end)
 end
 
---==================================================
--- PORTAS E DUTOS
---==================================================
-
-local removeEnvironmentEnabled = false
-
-local doorNames = {
-    ["door"] = true,
-    ["double door"] = true,
-    ["door double"] = true,
-    ["porta"] = true,
-    ["porta dupla"] = true
-}
-
-local function isDoorPart(obj)
-    local current = obj
-
-    for _ = 1, 4 do
-        if not current then break end
-
-        local n = norm(current.Name)
-
-        if doorNames[n]
-        or n:find("door", 1, true)
-        or n:find("porta", 1, true) then
-            return true
-        end
-
-        current = current.Parent
-    end
-
-    return false
-end
-
-local function hideEnvironmentPart(obj)
-    if not obj:IsA("BasePart") then return end
-    if not isDoorPart(obj) then return end
-
-    if not hidden[obj] then
-        hidden[obj] = {
-            transparency = obj.LocalTransparencyModifier,
-            collision = obj.CanCollide
-        }
-    end
-
-    obj.LocalTransparencyModifier = 1
-    obj.CanCollide = false
-end
-
-local function removeDoors(v)
-    removeEnvironmentEnabled = v
-
-    if v then
+local function setDoors(enabled)
+    if enabled then
         for _, obj in ipairs(workspace:GetDescendants()) do
-            hideEnvironmentPart(obj)
+            if obj:IsA("BasePart") then
+                local n = norm(obj.Name)
+                if n:find("door") or n:find("porta") then
+                    if not hidden[obj] then
+                        hidden[obj] = {
+                            Transparency = obj.LocalTransparencyModifier,
+                            CanCollide = obj.CanCollide
+                        }
+                    end
+
+                    obj.LocalTransparencyModifier = 1
+                    obj.CanCollide = false
+                end
+            end
         end
     else
-        for obj, data in pairs(hidden) do
-            if obj and obj.Parent then
-                obj.LocalTransparencyModifier = data.transparency
-                obj.CanCollide = data.collision
+        for part, data in pairs(hidden) do
+            if part and part.Parent then
+                part.LocalTransparencyModifier = data.Transparency
+                part.CanCollide = data.CanCollide
             end
-            hidden[obj] = nil
         end
+        table.clear(hidden)
     end
 end
 
---==================================================
--- ESP DUTOS
--- Apenas modelos de duto identificados
---==================================================
-
-local function isDuct(obj)
-    if not obj:IsA("Model") then return false end
-
-    local n = norm(obj.Name)
-
-    return n:find("duto", 1, true) ~= nil
-        or n:find("duct", 1, true) ~= nil
-        or n:find("hatch", 1, true) ~= nil
-end
-
-local function ductIsOpen(obj)
-    for _, name in ipairs({
-        "IsOpen", "Open", "Unlocked", "IsUnlocked"
-    }) do
-        local value = obj:GetAttribute(name)
-        if typeof(value) == "boolean" then
-            return value
-        end
-    end
-
-    return false
-end
-
-local function clearDuctESP()
+local function setDuctESP(enabled)
     for obj, h in pairs(ductESP) do
         if h then h:Destroy() end
-        ductESP[obj] = nil
     end
-end
+    table.clear(ductESP)
 
-local function refreshDuctESP()
-    clearDuctESP()
-
-    if not states["ESP Dutos"] then return end
+    if not enabled then return end
 
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if isDuct(obj) then
-            local h = Instance.new("Highlight")
-            h.Name = "DuctESP"
-            h.Adornee = obj
-            h.FillTransparency = 1
-            h.OutlineTransparency = 0
-            h.OutlineColor = ductIsOpen(obj)
-                and Color3.fromRGB(0, 255, 0)
-                or Color3.fromRGB(255, 0, 0)
-            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            h.Parent = gui
+        if obj:IsA("Model") then
+            local n = norm(obj.Name)
+            if n:find("duct") or n:find("duto") or n:find("hatch") then
+                local opened = obj:GetAttribute("IsOpen")
+                    or obj:GetAttribute("Open")
+                    or obj:GetAttribute("Unlocked")
+                    or obj:GetAttribute("IsUnlocked")
 
-            ductESP[obj] = h
+                local color = opened
+                    and Color3.fromRGB(40, 255, 100)
+                    or Color3.fromRGB(255, 45, 45)
+
+                local h = Instance.new("Highlight")
+                h.Adornee = obj
+                h.FillColor = color
+                h.OutlineColor = color
+                h.FillTransparency = 0.75
+                h.Parent = obj
+                ductESP[obj] = h
+            end
         end
     end
 end
 
---==================================================
--- ESP ITENS
---==================================================
-
 local knownItems = {
-    ["phone"] = true,
-    ["telephone"] = true,
-    ["gold bar"] = true,
-    ["gold bars"] = true,
-    ["laptop"] = true,
-    ["encrypted hard drive"] = true,
-    ["desk lamp"] = true,
-    ["fire extinguisher"] = true,
-    ["lab sample case"] = true,
-    ["chair"] = true,
-    ["bucket"] = true,
-    ["lantern"] = true,
-    ["granny bag"] = true,
-    ["keyboard"] = true,
-    ["headphones"] = true,
-    ["painting"] = true,
-    ["wristwatch"] = true,
-    ["watch"] = true,
-    ["toolbox"] = true,
-    ["tablet"] = true,
-    ["camera"] = true,
-    ["fan"] = true,
-    ["all in one pc"] = true,
-    ["console"] = true,
-    ["projector"] = true,
-    ["guitar"] = true,
-    ["record player"] = true,
-    ["leather bag"] = true,
-    ["desk fan"] = true,
-    ["textbook stack"] = true,
-    ["coffee mug"] = true,
-    ["mini fridge"] = true,
-    ["microwave"] = true,
-    ["banjo"] = true,
-    ["screwdriver"] = true,
-    ["screw driver"] = true,
-    ["needle"] = true,
-    ["agulha"] = true
+    phone = true,
+    cellphone = true,
+    goldbar = true,
+    laptop = true,
+    screwdriver = true,
+    needle = true,
+    agulha = true,
+    key = true,
+    chave = true,
+    item = true
 }
 
 local function getItemTarget(obj)
     local current = obj
-
     for _ = 1, 4 do
         if not current then break end
-
-        if knownItems[norm(current.Name)]
-        or current:GetAttribute("IsItem") == true
-        or current:GetAttribute("Item") == true then
-            if current:IsA("Model")
-            or current:IsA("Tool")
-            or current:IsA("BasePart") then
-                return current
-            end
+        if current:IsA("Model") then
+            return current
         end
-
         current = current.Parent
     end
+    return nil
 end
 
-local function clearItemESP()
+local function setItemESP(enabled)
     for obj, h in pairs(itemESP) do
         if h then h:Destroy() end
-        itemESP[obj] = nil
     end
-end
+    table.clear(itemESP)
 
-local function refreshItemESP()
-    clearItemESP()
-
-    if not states["ESP Itens e Chave"] then return end
-
-    local seen = {}
-
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        local target = getItemTarget(obj)
-
-        if target and not seen[target] then
-            seen[target] = true
-
-            local adornee = target
-
-            if target:IsA("Tool") then
-                adornee = target:FindFirstChild("Handle")
-                    or target:FindFirstChildWhichIsA("BasePart")
-            end
-
-            if adornee then
-                local h = Instance.new("Highlight")
-                h.Name = "LootESP"
-                h.Adornee = adornee
-                h.FillColor = Color3.fromRGB(255, 190, 50)
-                h.OutlineColor = Color3.fromRGB(255, 245, 170)
-                h.FillTransparency = 0.45
-                h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                h.Parent = gui
-
-                itemESP[target] = h
-            end
-        end
-    end
-end
-
---==================================================
--- RARIDADE / VALOR / PESO
---==================================================
-
-local rarityColors = {
-    common = Color3.fromRGB(190, 190, 190),
-    uncommon = Color3.fromRGB(70, 220, 100),
-    rare = Color3.fromRGB(60, 150, 255),
-    mythic = Color3.fromRGB(200, 70, 255),
-    secret = Color3.fromRGB(255, 190, 0)
-}
-
-local function readItemData(obj)
-    local function read(names)
-        for _, name in ipairs(names) do
-            local value = obj:GetAttribute(name)
-
-            if value ~= nil then return value end
-
-            local child = obj:FindFirstChild(name, true)
-
-            if child and (
-                child:IsA("StringValue")
-                or child:IsA("NumberValue")
-                or child:IsA("IntValue")
-            ) then
-                return child.Value
-            end
-        end
-    end
-
-    return read({"Rarity", "ItemRarity", "Tier"}),
-        read({"Value", "Price", "SellValue", "Worth"}),
-        read({"Weight", "ItemWeight", "Mass"})
-end
-
-local function clearRarityESP()
-    for obj, data in pairs(rarityESP) do
-        if data.highlight then data.highlight:Destroy() end
-        if data.tag then data.tag:Destroy() end
-        rarityESP[obj] = nil
-    end
-end
-
-local function refreshRarityESP()
-    clearRarityESP()
-
-    if not states["ESP Raridade"] then return end
-
-    local filters = {
-        common = states["Raridade Common"],
-        uncommon = states["Raridade Uncommon"],
-        rare = states["Raridade Rare"],
-        mythic = states["Raridade Mythic"],
-        secret = states["Raridade Secret"]
-    }
-
-    local filterActive = false
-
-    for _, value in pairs(filters) do
-        if value then filterActive = true break end
-    end
-
-    local seen = {}
+    if not enabled then return end
 
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Model") or obj:IsA("Tool") then
-            local rarity, value, weight = readItemData(obj)
-            local r = norm(rarity)
+            local target = getItemTarget(obj) or obj
+            local n = norm(target.Name)
 
-            if rarityColors[r]
-            and (not filterActive or filters[r])
-            and not seen[obj] then
+            if knownItems[n]
+                or target:GetAttribute("IsItem") == true
+                or target:GetAttribute("Item") == true then
 
-                seen[obj] = true
-
-                local adornee = obj
-
-                if obj:IsA("Tool") then
-                    adornee = obj:FindFirstChild("Handle")
-                        or obj:FindFirstChildWhichIsA("BasePart")
+                if not itemESP[target] then
+                    local h = Instance.new("Highlight")
+                    h.Adornee = target
+                    h.FillColor = Color3.fromRGB(255, 220, 30)
+                    h.OutlineColor = Color3.fromRGB(255, 245, 100)
+                    h.FillTransparency = 0.7
+                    h.Parent = target
+                    itemESP[target] = h
                 end
+            end
+        end
+    end
+end
+
+local rarityColors = {
+    common = Color3.fromRGB(180, 180, 180),
+    uncommon = Color3.fromRGB(50, 220, 90),
+    rare = Color3.fromRGB(60, 140, 255),
+    mythic = Color3.fromRGB(190, 60, 255),
+    secret = Color3.fromRGB(255, 50, 50)
+}
+
+local function readItemData(obj)
+    local rarity = obj:GetAttribute("Rarity")
+        or obj:GetAttribute("Raridade")
+        or "common"
+
+    local value = obj:GetAttribute("Value")
+        or obj:GetAttribute("Valor")
+        or ""
+
+    local weight = obj:GetAttribute("Weight")
+        or obj:GetAttribute("Peso")
+        or ""
+
+    for _, child in ipairs(obj:GetChildren()) do
+        if child:IsA("StringValue") then
+            local n = norm(child.Name)
+            if n == "rarity" or n == "raridade" then
+                rarity = child.Value
+            end
+        elseif child:IsA("NumberValue") or child:IsA("IntValue") then
+            local n = norm(child.Name)
+            if n == "value" or n == "valor" then
+                value = child.Value
+            elseif n == "weight" or n == "peso" then
+                weight = child.Value
+            end
+        end
+    end
+
+    return norm(rarity), value, weight
+end
+
+local function setRarityESP(enabled)
+    for obj, data in pairs(rarityESP) do
+        if data.Highlight then data.Highlight:Destroy() end
+        if data.Tag then data.Tag:Destroy() end
+    end
+    table.clear(rarityESP)
+
+    if not enabled then return end
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (
+            obj:GetAttribute("IsItem") == true
+            or obj:GetAttribute("Item") == true
+            or knownItems[norm(obj.Name)]
+        ) then
+            local rarity, value, weight = readItemData(obj)
+            local color = rarityColors[rarity]
+
+            if color then
+                local h = Instance.new("Highlight")
+                h.Adornee = obj
+                h.FillColor = color
+                h.OutlineColor = color
+                h.FillTransparency = 0.75
+                h.Parent = obj
+
+                local tag
+
+                local adornee = obj:FindFirstChild("Head")
+                    or obj.PrimaryPart
+                    or obj:FindFirstChildWhichIsA("BasePart")
 
                 if adornee then
-                    local color = rarityColors[r]
-
-                    local h = Instance.new("Highlight")
-                    h.Name = "RarityESP"
-                    h.Adornee = adornee
-                    h.FillColor = color
-                    h.OutlineColor = color
-                    h.FillTransparency = 0.45
-                    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                    h.Parent = gui
-
-                    local tag = Instance.new("BillboardGui")
-                    tag.Name = "RarityInfo"
+                    tag = Instance.new("BillboardGui")
                     tag.Adornee = adornee
-                    tag.Size = UDim2.fromOffset(210, 65)
-                    tag.StudsOffset = Vector3.new(0, 2.5, 0)
+                    tag.Size = UDim2.fromOffset(150, 45)
+                    tag.StudsOffset = Vector3.new(0, 2, 0)
                     tag.AlwaysOnTop = true
                     tag.Parent = gui
 
@@ -743,101 +576,88 @@ local function refreshRarityESP()
                     label.Size = UDim2.fromScale(1, 1)
                     label.BackgroundTransparency = 1
                     label.TextColor3 = color
-                    label.TextStrokeTransparency = 0.1
-                    label.TextScaled = true
+                    label.TextStrokeTransparency = 0.2
                     label.Font = Enum.Font.GothamBold
-
-                    label.Text = obj.Name
-                        .. "\n" .. tostring(rarity)
-                        .. "\nValor: " .. tostring(value or "N/D")
-                        .. " | Peso: " .. tostring(weight or "N/D") .. " kg"
-
+                    label.TextSize = 11
+                    label.Text = obj.Name .. "\n" .. rarity
+                        .. " | $" .. tostring(value)
+                        .. " | " .. tostring(weight)
                     label.Parent = tag
-
-                    rarityESP[obj] = {
-                        highlight = h,
-                        tag = tag
-                    }
                 end
+
+                rarityESP[obj] = {
+                    Highlight = h,
+                    Tag = tag
+                }
             end
         end
     end
 end
 
---==================================================
--- COLETA INSTANTÂNEA
---==================================================
-
-local function instantCollection(v)
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            if v then
-                if prompts[obj] == nil then
-                    prompts[obj] = obj.HoldDuration
-                end
+local function setInstantCollection(enabled)
+    if enabled then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") and not prompts[obj] then
+                prompts[obj] = obj.HoldDuration
                 obj.HoldDuration = 0
-            elseif prompts[obj] ~= nil then
-                obj.HoldDuration = prompts[obj]
-                prompts[obj] = nil
             end
         end
+    else
+        for prompt, duration in pairs(prompts) do
+            if prompt and prompt.Parent then
+                prompt.HoldDuration = duration
+            end
+        end
+        table.clear(prompts)
     end
 end
 
 workspace.DescendantAdded:Connect(function(obj)
-    if obj:IsA("ProximityPrompt")
-    and states["Coleta Instantânea"] then
-        prompts[obj] = obj.HoldDuration
+    if obj:IsA("ProximityPrompt") and states["Coleta Instantânea"] then
+        if not prompts[obj] then
+            prompts[obj] = obj.HoldDuration
+        end
         obj.HoldDuration = 0
     end
 end)
 
---==================================================
--- AUTO FARM
---==================================================
-
-local farmGeneration = 0
-
-local function autoFarm(v)
+local function setAutoFarm(enabled)
     farmGeneration += 1
     local generation = farmGeneration
 
-    if not v then return end
+    if not enabled then return end
 
     task.spawn(function()
-        while generation == farmGeneration do
-            local char = player.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
+        while states["Auto Farm"]
+            and farmGeneration == generation do
+
+            local character = player.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
 
             if root then
                 for _, obj in ipairs(workspace:GetDescendants()) do
-                    if generation ~= farmGeneration then break end
-
                     if obj:IsA("ProximityPrompt") and obj.Enabled then
                         local part = obj.Parent
-
                         if part and part:IsA("Attachment") then
                             part = part.Parent
                         end
 
                         if part and part:IsA("BasePart") then
-                            local distance =
-                                (root.Position - part.Position).Magnitude
+                            local distance = (root.Position - part.Position).Magnitude
 
                             if distance <= obj.MaxActivationDistance then
                                 pcall(function()
                                     obj:InputHoldBegin()
-                                    task.wait(0.15)
+                                    task.wait(0.1)
                                     obj:InputHoldEnd()
                                 end)
-                                task.wait(0.3)
                             end
                         end
                     end
                 end
             end
 
-            task.wait(0.5)
+            task.wait(0.3)
         end
     end)
 end
@@ -846,88 +666,84 @@ end
 -- BOTÕES
 --==================================================
 
+local order = 0
+
 local function createToggle(name, callback)
-    states[name] = false
+    order += 1
 
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0.92, 0, 0, 36)
-    button.BackgroundColor3 = Color3.fromRGB(42, 42, 49)
-    button.TextColor3 = Color3.new(1, 1, 1)
+    button.Name = name
+    button.Size = UDim2.new(1, -4, 0, 34)
+    button.BackgroundColor3 = Color3.fromRGB(35, 35, 43)
+    button.BorderSizePixel = 0
+    button.Font = Enum.Font.GothamSemibold
     button.TextSize = 12
-    button.Font = Enum.Font.GothamBold
-    button.Text = name .. " [OFF]"
-    button.Parent = content
+    button.TextColor3 = Color3.fromRGB(225, 225, 230)
+    button.Text = name .. "  [OFF]"
+    button.LayoutOrder = order
+    button.Parent = scroll
 
-    Instance.new("UICorner", button).CornerRadius =
-        UDim.new(0, 7)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = button
+
+    states[name] = false
 
     button.MouseButton1Click:Connect(function()
-        local nextState = not states[name]
-        states[name] = nextState
+        states[name] = not states[name]
 
-        local ok, err = pcall(function()
-            callback(nextState)
-        end)
+        local enabled = states[name]
+        button.Text = name .. (enabled and "  [ON]" or "  [OFF]")
+        button.BackgroundColor3 = enabled
+            and Color3.fromRGB(105, 25, 35)
+            or Color3.fromRGB(35, 35, 43)
 
-        if not ok then
-            states[name] = not nextState
-            warn(name .. ": " .. tostring(err))
+        if callback then
+            local ok, err = pcall(callback, enabled)
+            if not ok then
+                warn("[ROM] Erro em " .. name .. ": " .. tostring(err))
+            end
         end
-
-        button.Text = name ..
-            (states[name] and " [ON]" or " [OFF]")
-
-        button.BackgroundColor3 = states[name]
-            and Color3.fromRGB(170, 25, 40)
-            or Color3.fromRGB(42, 42, 49)
     end)
 end
 
 createToggle("ESP Players", refreshAll)
 createToggle("ESP Monstro Vermelho", refreshAll)
 createToggle("ESP Nome", refreshAll)
-
-createToggle("ESP Dutos", refreshDuctESP)
-createToggle("ESP Itens e Chave", refreshItemESP)
-
-createToggle("ESP Raridade", refreshRarityESP)
-createToggle("Raridade Common", refreshRarityESP)
-createToggle("Raridade Uncommon", refreshRarityESP)
-createToggle("Raridade Rare", refreshRarityESP)
-createToggle("Raridade Mythic", refreshRarityESP)
-createToggle("Raridade Secret", refreshRarityESP)
-
+createToggle("ESP Dutos", setDuctESP)
+createToggle("ESP Itens e Chave", setItemESP)
+createToggle("ESP Raridade", setRarityESP)
 createToggle("Ultra Brilho", setBrightness)
-createToggle("Stamina Infinita", stamina)
-createToggle("Remover Portas e Dutos", removeDoors)
-createToggle("Coleta Instantânea", instantCollection)
-createToggle("Auto Farm", autoFarm)
+createToggle("Stamina Infinita", setStamina)
+createToggle("Remover Portas e Dutos", setDoors)
+createToggle("Coleta Instantânea", setInstantCollection)
+createToggle("Auto Farm", setAutoFarm)
 
 --==================================================
 -- ATUALIZAÇÃO AUTOMÁTICA
 --==================================================
 
 task.spawn(function()
-    while gui.Parent do
+    while gui and gui.Parent and not destroyed do
+        task.wait(1.5)
+
         if states["ESP Players"]
-        or states["ESP Monstro Vermelho"]
-        or states["ESP Nome"] then
+            or states["ESP Monstro Vermelho"]
+            or states["ESP Nome"] then
             refreshAll()
         end
 
         if states["ESP Dutos"] then
-            refreshDuctESP()
+            setDuctESP(true)
         end
 
         if states["ESP Itens e Chave"] then
-            refreshItemESP()
+            setItemESP(true)
         end
 
         if states["ESP Raridade"] then
-            refreshRarityESP()
+            setRarityESP(true)
         end
-
-        task.wait(1.5)
     end
 end)
 
@@ -936,24 +752,50 @@ end)
 --==================================================
 
 gui.Destroying:Connect(function()
-    clearDuctESP()
-    clearItemESP()
-    clearRarityESP()
+    destroyed = true
+
+    staminaGeneration += 1
+    farmGeneration += 1
+
+    for prompt, duration in pairs(prompts) do
+        if prompt and prompt.Parent then
+            pcall(function()
+                prompt.HoldDuration = duration
+            end)
+        end
+    end
+
+    for part, data in pairs(hidden) do
+        if part and part.Parent then
+            pcall(function()
+                part.LocalTransparencyModifier = data.Transparency
+                part.CanCollide = data.CanCollide
+            end)
+        end
+    end
+
+    for property, value in pairs(originalLighting) do
+        pcall(function()
+            Lighting[property] = value
+        end)
+    end
 
     for model in pairs(highlights) do
         clearModel(model)
     end
 
-    for model in pairs(tags) do
-        clearModel(model)
+    for obj, h in pairs(ductESP) do
+        if h then h:Destroy() end
     end
 
-    for obj, data in pairs(hidden) do
-        if obj and obj.Parent then
-            obj.LocalTransparencyModifier = data.transparency
-            obj.CanCollide = data.collision
-        end
+    for obj, h in pairs(itemESP) do
+        if h then h:Destroy() end
+    end
+
+    for obj, data in pairs(rarityESP) do
+        if data.Highlight then data.Highlight:Destroy() end
+        if data.Tag then data.Tag:Destroy() end
     end
 end)
 
-print("ROUBE OU MORRA V9 CARREGADO!")
+print("[ROUBE OU MORRA V9] Mod Menu carregado!")
