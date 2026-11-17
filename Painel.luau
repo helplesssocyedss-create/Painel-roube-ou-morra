@@ -1,75 +1,135 @@
 
--- ROUBE OU MORRA - MOD MENU V2
--- LocalScript / Roblox Studio
+-- ROUBE OU MORRA MOD MENU V3
+-- Roblox Studio - LocalScript
+-- Recursos visuais locais
 
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
-local player = Players.LocalPlayer
+local RunService = game:GetService("RunService")
 
-local old = player.PlayerGui:FindFirstChild("RoubeOuMorraMenu")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local old = playerGui:FindFirstChild("RoubeOuMorraV3")
 if old then old:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraMenu"
+gui.Name = "RoubeOuMorraV3"
 gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+gui.Parent = playerGui
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(280, 340)
-frame.Position = UDim2.new(0.05, 0, 0.2, 0)
-frame.BackgroundColor3 = Color3.fromRGB(18,18,22)
+frame.Size = UDim2.fromOffset(285, 430)
+frame.Position = UDim2.new(0.04, 0, 0.2, 0)
+frame.BackgroundColor3 = Color3.fromRGB(17,17,21)
 frame.Parent = gui
 
-Instance.new("UICorner", frame).CornerRadius =
+Instance.new("UICorner",frame).CornerRadius =
     UDim.new(0,12)
 
--- CABEÇALHO
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1,0,0,45)
+header.Size = UDim2.new(1,0,0,42)
 header.BackgroundColor3 = Color3.fromRGB(180,20,35)
 header.Parent = frame
 
+Instance.new("UICorner",header).CornerRadius =
+    UDim.new(0,12)
+
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,-45,1,0)
+title.Size = UDim2.new(1,-85,1,0)
+title.Position = UDim2.fromOffset(10,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA"
+title.Text = "ROUBE OU MORRA V3"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 17
+title.TextSize = 15
+title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = header
 
--- MINIMIZAR
 local minimize = Instance.new("TextButton")
-minimize.Size = UDim2.fromOffset(40,40)
+minimize.Size = UDim2.fromOffset(38,38)
 minimize.Position = UDim2.new(1,-42,0,2)
-minimize.BackgroundTransparency = 1
-minimize.Text = "-"
+minimize.Text = "—"
+minimize.TextSize = 22
 minimize.TextColor3 = Color3.new(1,1,1)
-minimize.TextSize = 28
+minimize.BackgroundTransparency = 1
 minimize.Parent = header
 
-local content = Instance.new("Frame")
-content.Position = UDim2.fromOffset(0,50)
+local restore = Instance.new("TextButton")
+restore.Size = UDim2.fromOffset(48,48)
+restore.Position = UDim2.new(0,15,0.5,-24)
+restore.Text = "RM"
+restore.TextColor3 = Color3.new(1,1,1)
+restore.TextSize = 16
+restore.Font = Enum.Font.GothamBold
+restore.BackgroundColor3 = Color3.fromRGB(180,20,35)
+restore.Visible = false
+restore.Parent = gui
+Instance.new("UICorner",restore).CornerRadius =
+    UDim.new(1,0)
+
+local content = Instance.new("ScrollingFrame")
+content.Position = UDim2.fromOffset(0,48)
 content.Size = UDim2.new(1,0,1,-50)
 content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 4
+content.CanvasSize = UDim2.fromOffset(0,430)
 content.Parent = frame
 
-local minimized = false
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0,7)
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.Parent = content
 
 minimize.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    content.Visible = not minimized
-    frame.Size = minimized
-        and UDim2.fromOffset(280,45)
-        or UDim2.fromOffset(280,340)
-    minimize.Text = minimized and "+" or "-"
+    frame.Visible = false
+    restore.Visible = true
 end)
 
--- ESP
-local espNames = false
-local espPlayers = false
-local ultraBright = false
+restore.MouseButton1Click:Connect(function()
+    frame.Visible = true
+    restore.Visible = false
+end)
 
+-- ARRASTAR MENU
+local UserInputService = game:GetService("UserInputService")
+local dragging, dragStart, startPos
+
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- ESTADOS
+local states = {}
+local connections = {}
 local highlights = {}
 local nameTags = {}
 
@@ -85,76 +145,73 @@ local function clearESP(plr)
     end
 end
 
-local function updatePlayer(plr)
-    if plr == player then return end
-
+-- ESP DE JOGADORES
+local function updatePlayerESP(plr)
     clearESP(plr)
+
+    if plr == player then return end
 
     local character = plr.Character
     if not character then return end
 
-    if espPlayers then
+    if states["ESP Players"] then
         local h = Instance.new("Highlight")
-        h.FillTransparency = 1
+        h.Adornee = character
+        h.FillColor = Color3.fromRGB(80,150,255)
+        h.FillTransparency = 0.65
         h.OutlineColor = Color3.new(1,1,1)
         h.OutlineTransparency = 0
-        h.Adornee = character
         h.Parent = character
         highlights[plr] = h
     end
 
-    if espNames then
+    if states["ESP Nome"] then
         local head = character:FindFirstChild("Head")
         if head then
-            local billboard = Instance.new("BillboardGui")
-            billboard.Size = UDim2.fromOffset(150,35)
-            billboard.StudsOffset = Vector3.new(0,2.5,0)
-            billboard.AlwaysOnTop = true
-            billboard.Adornee = head
-            billboard.Parent = gui
+            local tag = Instance.new("BillboardGui")
+            tag.Adornee = head
+            tag.Size = UDim2.fromOffset(100,20)
+            tag.StudsOffset = Vector3.new(0,2.3,0)
+            tag.AlwaysOnTop = true
+            tag.Parent = gui
 
             local label = Instance.new("TextLabel")
             label.Size = UDim2.fromScale(1,1)
             label.BackgroundTransparency = 1
             label.Text = plr.DisplayName
             label.TextColor3 = Color3.new(1,1,1)
-            label.TextStrokeTransparency = 0
+            label.TextStrokeTransparency = 0.3
             label.TextScaled = true
             label.Font = Enum.Font.GothamBold
-            label.Parent = billboard
+            label.Parent = tag
 
-            nameTags[plr] = billboard
+            nameTags[plr] = tag
         end
     end
 end
 
-local function refreshESP()
+local function refreshPlayers()
     for _,plr in ipairs(Players:GetPlayers()) do
-        updatePlayer(plr)
+        updatePlayerESP(plr)
     end
 end
 
-local function setupPlayer(plr)
+local function addPlayer(plr)
     plr.CharacterAdded:Connect(function()
         task.wait(0.5)
-        updatePlayer(plr)
+        updatePlayerESP(plr)
     end)
 end
 
 for _,plr in ipairs(Players:GetPlayers()) do
-    setupPlayer(plr)
+    addPlayer(plr)
 end
 
-Players.PlayerAdded:Connect(function(plr)
-    setupPlayer(plr)
-end)
+Players.PlayerAdded:Connect(addPlayer)
+Players.PlayerRemoving:Connect(clearESP)
 
-Players.PlayerRemoving:Connect(function(plr)
-    clearESP(plr)
-end)
-
--- BRILHO
-local originalLighting = {
+-- ULTRA BRILHO
+local original = {
     Brightness = Lighting.Brightness,
     ClockTime = Lighting.ClockTime,
     GlobalShadows = Lighting.GlobalShadows,
@@ -170,61 +227,78 @@ local function setBrightness(enabled)
         Lighting.Ambient = Color3.fromRGB(200,200,200)
         Lighting.OutdoorAmbient = Color3.fromRGB(200,200,200)
     else
-        for property,value in pairs(originalLighting) do
+        for property,value in pairs(original) do
             Lighting[property] = value
         end
     end
 end
 
 -- BOTÕES
-local function createButton(name, callback, index)
+local function createToggle(name, callback)
+    states[name] = false
+
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0.9,0,0,32)
-    button.Position = UDim2.new(0.05,0,0,(index-1)*37)
-    button.BackgroundColor3 = Color3.fromRGB(45,45,52)
+    button.Size = UDim2.new(0.92,0,0,36)
+    button.BackgroundColor3 = Color3.fromRGB(42,42,49)
     button.TextColor3 = Color3.new(1,1,1)
-    button.Font = Enum.Font.GothamBold
     button.TextSize = 12
+    button.Font = Enum.Font.GothamBold
     button.Text = name.." [OFF]"
     button.Parent = content
 
     Instance.new("UICorner",button).CornerRadius =
         UDim.new(0,7)
 
-    local active = false
-
     button.MouseButton1Click:Connect(function()
-        active = not active
+        local nextState = not states[name]
 
-        local success,err = pcall(function()
-            callback(active)
+        local ok,err = pcall(function()
+            callback(nextState)
         end)
 
-        if not success then
-            active = false
-            warn("Erro em "..name..": "..tostring(err))
+        if not ok then
+            warn(name..": "..tostring(err))
+            return
         end
 
-        button.Text = name..(active and " [ON]" or " [OFF]")
-        button.BackgroundColor3 = active
+        states[name] = nextState
+        button.Text = name..(nextState and " [ON]" or " [OFF]")
+        button.BackgroundColor3 = nextState
             and Color3.fromRGB(170,25,40)
-            or Color3.fromRGB(45,45,52)
+            or Color3.fromRGB(42,42,49)
     end)
 end
 
-createButton("ESP Nome",function(v)
-    espNames = v
-    refreshESP()
-end,1)
+createToggle("ESP Nome",function(v)
+    refreshPlayers()
+end)
 
-createButton("ESP Players Branco",function(v)
-    espPlayers = v
-    refreshESP()
-end,2)
+createToggle("ESP Players",function(v)
+    refreshPlayers()
+end)
 
-createButton("Ultra Brilho",function(v)
-    ultraBright = v
+createToggle("ESP Monstro Vermelho",function(v)
+    warn("Configure o nome do modelo do monstro no jogo.")
+end)
+
+createToggle("Stamina Infinita",function(v)
+    warn("Requer integração com o sistema de stamina do servidor.")
+end)
+
+createToggle("Remover Portas e Dutos",function(v)
+    warn("Requer os nomes das portas e dutos do mapa.")
+end)
+
+createToggle("Coleta Instantânea",function(v)
+    warn("Requer integração com o sistema de coleta.")
+end)
+
+createToggle("Ultra Brilho",function(v)
     setBrightness(v)
-end,3)
+end)
 
-print("Roube ou Morra V2 carregado!")
+createToggle("Auto Farm",function(v)
+    warn("Requer integração com os mapas, itens e IA do monstro.")
+end)
+
+print("ROUBE OU MORRA V3 carregado!")
