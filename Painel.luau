@@ -1,291 +1,236 @@
 
--- ROUBE OU MORRA V4
--- Roblox Studio - LocalScript
+-- =========================================
+-- FUNCOES EXTRAS V4
+-- =========================================
 
-local Players = game:GetService("Players")
-local Lighting = game:GetService("Lighting")
-local player = Players.LocalPlayer
-local guiParent = player:WaitForChild("PlayerGui")
+local CollectionService = game:GetService("CollectionService")
+local farmRunning = false
+local staminaRunning = false
 
-local old = guiParent:FindFirstChild("RoubeOuMorraV4")
-if old then old:Destroy() end
+-- NOMES PARA IDENTIFICACAO
+local function containsName(name, words)
+    name = string.lower(name or "")
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV4"
-gui.ResetOnSpawn = false
-gui.Parent = guiParent
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(280, 370)
-frame.Position = UDim2.new(0.05, 0, 0.2, 0)
-frame.BackgroundColor3 = Color3.fromRGB(18,18,22)
-frame.Parent = gui
-
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0,12)
-
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1,0,0,44)
-header.BackgroundColor3 = Color3.fromRGB(175,25,40)
-header.Parent = frame
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,-90,1,0)
-title.Position = UDim2.fromOffset(10,0)
-title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V4"
-title.TextColor3 = Color3.new(1,1,1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 14
-title.Parent = header
-
-local minimize = Instance.new("TextButton")
-minimize.Size = UDim2.fromOffset(40,40)
-minimize.Position = UDim2.new(1,-42,0,2)
-minimize.Text = "-"
-minimize.TextSize = 25
-minimize.TextColor3 = Color3.new(1,1,1)
-minimize.BackgroundTransparency = 1
-minimize.Parent = header
-
-local restore = Instance.new("TextButton")
-restore.Size = UDim2.fromOffset(48,48)
-restore.Position = UDim2.new(0,15,0.5,-24)
-restore.Text = "RM"
-restore.TextColor3 = Color3.new(1,1,1)
-restore.BackgroundColor3 = Color3.fromRGB(175,25,40)
-restore.Visible = false
-restore.Parent = gui
-Instance.new("UICorner",restore).CornerRadius = UDim.new(1,0)
-
-local content = Instance.new("ScrollingFrame")
-content.Position = UDim2.fromOffset(0,50)
-content.Size = UDim2.new(1,0,1,-55)
-content.BackgroundTransparency = 1
-content.BorderSizePixel = 0
-content.ScrollBarThickness = 4
-content.CanvasSize = UDim2.fromOffset(0,400)
-content.Parent = frame
-
-local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0,7)
-layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-layout.Parent = content
-
-minimize.MouseButton1Click:Connect(function()
-    frame.Visible = false
-    restore.Visible = true
-end)
-
-restore.MouseButton1Click:Connect(function()
-    frame.Visible = true
-    restore.Visible = false
-end)
-
--- ESTADOS
-local states = {
-    ["ESP Nome"] = false,
-    ["ESP Players"] = false,
-    ["ESP Monstro"] = false,
-    ["Ultra Brilho"] = false
-}
-
-local playerHighlights = {}
-local playerNames = {}
-local monsterHighlights = {}
-
-local function clearPlayerESP(plr)
-    if playerHighlights[plr] then
-        playerHighlights[plr]:Destroy()
-        playerHighlights[plr] = nil
-    end
-
-    if playerNames[plr] then
-        playerNames[plr]:Destroy()
-        playerNames[plr] = nil
-    end
-end
-
--- IMPORTANTE:
--- Configure o atributo IsMonster = true
--- no modelo do monstro no Roblox Studio.
-
-local function isMonster(character)
-    return character
-        and character:GetAttribute("IsMonster") == true
-end
-
-local function updatePlayerESP(plr)
-    clearPlayerESP(plr)
-
-    if plr == player then return end
-
-    local character = plr.Character
-    if not character then return end
-
-    -- Impede ESP de jogador no monstro
-    if isMonster(character) then return end
-
-    if states["ESP Players"] then
-        local h = Instance.new("Highlight")
-        h.Adornee = character
-        h.FillColor = Color3.fromRGB(80,150,255)
-        h.FillTransparency = 0.65
-        h.OutlineColor = Color3.new(1,1,1)
-        h.OutlineTransparency = 0
-        h.Parent = gui
-
-        playerHighlights[plr] = h
-    end
-
-    if states["ESP Nome"] then
-        local head = character:FindFirstChild("Head")
-
-        if head then
-            local tag = Instance.new("BillboardGui")
-            tag.Adornee = head
-            tag.Size = UDim2.fromOffset(100,18)
-            tag.StudsOffset = Vector3.new(0,2.3,0)
-            tag.AlwaysOnTop = true
-            tag.Parent = gui
-
-            local label = Instance.new("TextLabel")
-            label.Size = UDim2.fromScale(1,1)
-            label.BackgroundTransparency = 1
-            label.Text = plr.DisplayName
-            label.TextColor3 = Color3.new(1,1,1)
-            label.TextStrokeTransparency = 0.3
-            label.TextScaled = true
-            label.Font = Enum.Font.GothamBold
-            label.Parent = tag
-
-            playerNames[plr] = tag
+    for _, word in ipairs(words) do
+        if string.find(name, word, 1, true) then
+            return true
         end
     end
+
+    return false
 end
 
-local function refreshPlayers()
-    for _,plr in ipairs(Players:GetPlayers()) do
-        updatePlayerESP(plr)
-    end
-end
+-- =========================================
+-- 1. STAMINA INFINITA
+-- =========================================
 
-local function refreshMonster()
-    for model,h in pairs(monsterHighlights) do
-        h:Destroy()
-        monsterHighlights[model] = nil
-    end
+local function findStaminaValues()
+    local results = {}
 
-    if not states["ESP Monstro"] then return end
-
-    for _,obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and isMonster(obj) then
-            local h = Instance.new("Highlight")
-            h.Adornee = obj
-            h.FillColor = Color3.fromRGB(255,0,0)
-            h.FillTransparency = 0.75
-            h.OutlineColor = Color3.fromRGB(255,0,0)
-            h.OutlineTransparency = 0
-            h.Parent = gui
-
-            monsterHighlights[obj] = h
+    for _, obj in ipairs(player:GetDescendants()) do
+        if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
+        and containsName(obj.Name, {
+            "stamina", "energy", "energia", "fôlego", "folego"
+        }) then
+            table.insert(results, obj)
         end
     end
+
+    return results
 end
 
-local function refreshAll()
-    refreshPlayers()
-    refreshMonster()
-end
+local function infiniteStamina(enabled)
+    staminaRunning = enabled
 
-Players.PlayerAdded:Connect(function(plr)
-    plr.CharacterAdded:Connect(function()
-        task.wait(0.5)
-        updatePlayerESP(plr)
-    end)
-end)
+    if not enabled then return end
 
-Players.PlayerRemoving:Connect(clearPlayerESP)
+    task.spawn(function()
+        while staminaRunning do
+            for _, value in ipairs(findStaminaValues()) do
+                if value.Parent then
+                    local maximum =
+                        value:GetAttribute("MaxValue")
+                        or value:GetAttribute("MaxStamina")
 
-for _,plr in ipairs(Players:GetPlayers()) do
-    plr.CharacterAdded:Connect(function()
-        task.wait(0.5)
-        updatePlayerESP(plr)
+                    if maximum then
+                        value.Value = maximum
+                    end
+                end
+            end
+
+            task.wait(0.15)
+        end
     end)
 end
 
--- ULTRA BRILHO
-local original = {
-    Brightness = Lighting.Brightness,
-    ClockTime = Lighting.ClockTime,
-    GlobalShadows = Lighting.GlobalShadows,
-    Ambient = Lighting.Ambient,
-    OutdoorAmbient = Lighting.OutdoorAmbient
+-- =========================================
+-- 2. REMOVER PORTAS E DUTOS
+-- =========================================
+
+local hiddenParts = {}
+
+local doorWords = {
+    "porta", "door", "duto", "vent",
+    "duct", "hatch"
 }
 
-local function setBrightness(enabled)
+local function removeDoors(enabled)
     if enabled then
-        Lighting.Brightness = 3
-        Lighting.ClockTime = 14
-        Lighting.GlobalShadows = false
-        Lighting.Ambient = Color3.fromRGB(200,200,200)
-        Lighting.OutdoorAmbient = Color3.fromRGB(200,200,200)
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart")
+            and containsName(obj.Name, doorWords) then
+
+                if not hiddenParts[obj] then
+                    hiddenParts[obj] = {
+                        Transparency = obj.LocalTransparencyModifier,
+                        CanCollide = obj.CanCollide
+                    }
+                end
+
+                obj.LocalTransparencyModifier = 1
+                obj.CanCollide = false
+            end
+        end
     else
-        for property,value in pairs(original) do
-            Lighting[property] = value
+        for obj, original in pairs(hiddenParts) do
+            if obj.Parent then
+                obj.LocalTransparencyModifier =
+                    original.Transparency
+
+                obj.CanCollide = original.CanCollide
+            end
+
+            hiddenParts[obj] = nil
         end
     end
 end
 
--- BOTÕES
-local function createToggle(name, callback)
-    local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0.92,0,0,35)
-    button.BackgroundColor3 = Color3.fromRGB(45,45,52)
-    button.TextColor3 = Color3.new(1,1,1)
-    button.TextSize = 12
-    button.Font = Enum.Font.GothamBold
-    button.Text = name.." [OFF]"
-    button.Parent = content
+-- =========================================
+-- 3. COLETA INSTANTANEA
+-- =========================================
 
-    Instance.new("UICorner",button).CornerRadius = UDim.new(0,7)
+local originalPrompts = {}
 
-    button.MouseButton1Click:Connect(function()
-        local nextState = not states[name]
+local function instantCollection(enabled)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
 
-        local ok,err = pcall(function()
-            callback(nextState)
-        end)
+            if enabled then
+                if not originalPrompts[obj] then
+                    originalPrompts[obj] = obj.HoldDuration
+                end
 
-        if not ok then
-            warn(name..": "..tostring(err))
-            return
+                obj.HoldDuration = 0
+            else
+                if originalPrompts[obj] ~= nil then
+                    obj.HoldDuration = originalPrompts[obj]
+                    originalPrompts[obj] = nil
+                end
+            end
         end
+    end
+end
 
-        states[name] = nextState
-        button.Text = name..(nextState and " [ON]" or " [OFF]")
-        button.BackgroundColor3 = nextState
-            and Color3.fromRGB(175,25,40)
-            or Color3.fromRGB(45,45,52)
+-- =========================================
+-- 4. AUTO FARM
+-- =========================================
+
+local collectingWords = {
+    "coletar", "coleta", "pegar",
+    "collect", "pickup", "pick up",
+    "item", "resource", "recurso"
+}
+
+local function getPromptPosition(prompt)
+    local parent = prompt.Parent
+
+    if not parent then return nil end
+
+    if parent:IsA("Attachment") then
+        return parent.WorldPosition
+    end
+
+    if parent:IsA("BasePart") then
+        return parent.Position
+    end
+
+    local part = parent:FindFirstChildWhichIsA(
+        "BasePart", true
+    )
+
+    return part and part.Position
+end
+
+local function autoFarm(enabled)
+    farmRunning = enabled
+
+    if not enabled then return end
+
+    task.spawn(function()
+        while farmRunning do
+            local character = player.Character
+            local root = character and
+                character:FindFirstChild("HumanoidRootPart")
+
+            if root then
+                for _, prompt in ipairs(
+                    workspace:GetDescendants()
+                ) do
+                    if not farmRunning then break end
+
+                    if prompt:IsA("ProximityPrompt")
+                    and prompt.Enabled
+                    and containsName(
+                        prompt.ActionText .. " " ..
+                        prompt.ObjectText,
+                        collectingWords
+                    ) then
+
+                        local position = getPromptPosition(prompt)
+
+                        if position then
+                            local distance =
+                                (root.Position - position).Magnitude
+
+                            if distance <= prompt.MaxActivationDistance then
+                                pcall(function()
+                                    prompt:InputHoldBegin()
+                                    task.wait(0.1)
+                                    prompt:InputHoldEnd()
+                                end)
+
+                                task.wait(0.3)
+                            end
+                        end
+                    end
+                end
+            end
+
+            task.wait(0.5)
+        end
     end)
 end
 
-createToggle("ESP Nome",function(v)
-    states["ESP Nome"] = v
-    refreshPlayers()
+-- =========================================
+-- CRIAR OS QUATRO BOTOES
+-- =========================================
+
+createToggle("Stamina Infinita", function(v)
+    infiniteStamina(v)
 end)
 
-createToggle("ESP Players",function(v)
-    states["ESP Players"] = v
-    refreshPlayers()
+createToggle("Remover Portas e Dutos", function(v)
+    removeDoors(v)
 end)
 
-createToggle("ESP Monstro",function(v)
-    states["ESP Monstro"] = v
-    refreshMonster()
+createToggle("Coleta Instantânea", function(v)
+    instantCollection(v)
 end)
 
-createToggle("Ultra Brilho",function(v)
-    setBrightness(v)
+createToggle("Auto Farm", function(v)
+    autoFarm(v)
 end)
 
-print("ROUBE OU MORRA V4 carregado!")
+-- =========================================
+-- FIM DAS FUNCOES EXTRAS
+-- =========================================
