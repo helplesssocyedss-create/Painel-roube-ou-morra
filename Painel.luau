@@ -1,258 +1,148 @@
 
 --========================================================
--- ROUBE OU MORRA V11 - PATCH DE CORRECOES
+-- ROUBE OU MORRA V12
 -- Feito por Tales
--- COLE ESTE BLOCO NO FINAL DA V10
+-- CORRECOES: MONSTROS E PORTAS/ESCOTILHAS
+-- INSERIR ANTES DE: -- INTERFACE
 --========================================================
 
--- IDENTIFICACAO AMPLIADA DE MONSTROS
+-- IDENTIFICACAO DE MONSTROS
 
-isMonster = function(obj)
-    if not obj or not obj:IsA("Model") then
+local function hasMonsterSignal(model)
+    if not model or not model:IsA("Model") then
         return false
     end
 
-    if getPlayerFromModel(obj) then
-        return false
-    end
-
-    if contains(obj.Name, monsterNames) then
+    if contains(model.Name, monsterNames) then
         return true
     end
 
-    local humanoid = obj:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        return true
-    end
-
-    for _, attribute in ipairs({
+    local attributes = {
         "IsMonster", "Monster", "IsEnemy",
-        "Enemy", "EntityType", "NPCType"
-    }) do
-        local value = obj:GetAttribute(attribute)
+        "Enemy", "EntityType", "NPCType",
+        "Role", "CharacterType"
+    }
+
+    for _, attribute in ipairs(attributes) do
+        local value = model:GetAttribute(attribute)
 
         if value == true then
             return true
         end
 
         if type(value) == "string"
-            and contains(value, {"monster", "enemy", "entity", "monstro"}) then
+            and contains(value, {
+                "monster", "enemy", "entity",
+                "monstro", "inimigo", "creature"
+            }) then
             return true
+        end
+    end
+
+    -- Procura sinais nos objetos internos.
+    local checked = 0
+
+    for _, child in ipairs(model:GetDescendants()) do
+        checked += 1
+        if checked > 100 then break end
+
+        if contains(child.Name, {
+            "monster", "monstro", "enemy",
+            "inimigo", "creature"
+        }) then
+            return true
+        end
+
+        for _, attribute in ipairs(attributes) do
+            local value = child:GetAttribute(attribute)
+
+            if value == true then
+                return true
+            end
+
+            if type(value) == "string"
+                and contains(value, {
+                    "monster", "enemy", "monstro",
+                    "inimigo", "creature"
+                }) then
+                return true
+            end
         end
     end
 
     return false
 end
 
--- RARIDADE: PROCURA NO OBJETO E NO MODELO PAI
-
-local function getAttributeFromParents(obj, names)
-    local current = obj
-    local depth = 0
-
-    while current and depth < 6 do
-        for _, name in ipairs(names) do
-            local value = current:GetAttribute(name)
-            if value ~= nil then
-                return value
-            end
-        end
-
-        current = current.Parent
-        depth += 1
-    end
-
-    return nil
+isMonster = function(obj)
+    return hasMonsterSignal(obj)
 end
 
-getRarity = function(obj)
-    if not obj or isMonster(obj) then
-        return nil
-    end
-
-    local value = lower(getAttributeFromParents(obj, {
-        "Rarity", "Raridade", "ItemRarity",
-        "ItemRaridade", "Tier", "RarityName"
-    }))
-
-    value = value:gsub("á", "a")
-        :gsub("ã", "a")
-        :gsub("é", "e")
-        :gsub("í", "i")
-        :gsub("ó", "o")
-
-    local aliases = {
-        comum = "Common",
-        common = "Common",
-        incomum = "Uncommon",
-        uncommon = "Uncommon",
-        raro = "Rare",
-        rare = "Rare",
-        epico = "Epic",
-        epic = "Epic",
-        lendario = "Legendary",
-        legendary = "Legendary",
-        mitico = "Mythic",
-        mythic = "Mythic",
-        secreto = "Secret",
-        secret = "Secret"
-    }
-
-    return aliases[value]
-end
-
--- INFORMACOES DOS ITENS
-
-local function getItemInfo(obj)
-    local price = getAttributeFromParents(obj, {
-        "Price", "Preco", "Preço", "Value",
-        "Valor", "SellValue", "ItemValue"
-    })
-
-    local weight = getAttributeFromParents(obj, {
-        "Weight", "Peso", "Kg", "Kilos",
-        "Quilos", "Mass", "ItemWeight"
-    })
-
-    return price, weight
-end
-
-local function isItemObject(obj)
-    if not obj then return false end
-    if isMonster(obj) then return false end
-
-    if getRarity(obj) then
-        return true
-    end
-
-    return contains(obj.Name, knownItems)
-end
-
--- ESP COM NOME, RARIDADE, PRECO E PESO
-
-createESP = function(obj, color, labelText)
-    if not obj or not obj.Parent then return end
-    if not obj:IsA("Model") and not obj:IsA("BasePart") then
-        return
-    end
-
-    if not highlights[obj] then
-        local h = Instance.new("Highlight")
-        h.Name = "TalesESP"
-        h.Adornee = obj
-        h.FillColor = color
-        h.OutlineColor = color
-        h.FillTransparency = 0.8
-        h.OutlineTransparency = 0
-        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        h.Parent = playerGui
-        highlights[obj] = h
-    else
-        highlights[obj].FillColor = color
-        highlights[obj].OutlineColor = color
-    end
-
-    if states.ESPNames then
-        local part = obj:IsA("Model")
-            and (obj:FindFirstChild("Head")
-            or obj:FindFirstChildWhichIsA("BasePart"))
-            or obj
-
-        if part and part:IsA("BasePart") then
-            if not tags[obj] then
-                local billboard = Instance.new("BillboardGui")
-                billboard.Name = "TalesName"
-                billboard.Adornee = part
-                billboard.Size = UDim2.fromOffset(220, 48)
-                billboard.StudsOffset = Vector3.new(0, 3, 0)
-                billboard.AlwaysOnTop = true
-
-                local label = Instance.new("TextLabel")
-                label.Name = "Label"
-                label.Size = UDim2.fromScale(1, 1)
-                label.BackgroundTransparency = 1
-                label.TextColor3 = color
-                label.TextStrokeTransparency = 0
-                label.TextScaled = true
-                label.TextWrapped = true
-                label.Font = Enum.Font.GothamBold
-                label.Parent = billboard
-
-                billboard.Parent = playerGui
-                tags[obj] = billboard
-            end
-
-            local label = tags[obj]:FindFirstChild("Label")
-            if label then
-                label.Text = labelText or obj.Name
-                label.TextColor3 = color
-            end
-        end
-    elseif tags[obj] then
-        tags[obj]:Destroy()
-        tags[obj] = nil
-    end
-end
-
--- ATUALIZACAO DAS ESPs
+-- ESP: MONSTRO TEM PRIORIDADE SOBRE PLAYER
 
 refreshESP = function()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") then
-            local p = getPlayerFromModel(obj)
+            if isMonster(obj) and states.ESPMonsters then
+                createESP(
+                    obj,
+                    Color3.fromRGB(255, 35, 35),
+                    obj.Name .. " [MONSTRO]"
+                )
 
-            if p and p ~= player and states.ESPPlayers then
-                createESP(obj, Color3.fromRGB(40,140,255), p.Name)
+            else
+                local p = getPlayerFromModel(obj)
 
-            elseif isMonster(obj) and states.ESPMonsters then
-                createESP(obj, Color3.fromRGB(255,45,45),
-                    obj.Name .. " [MONSTRO]")
+                if p and p ~= player and states.ESPPlayers then
+                    createESP(
+                        obj,
+                        Color3.fromRGB(40, 140, 255),
+                        p.Name
+                    )
+                end
+            end
 
-            elseif states.ESPDucts and contains(obj.Name, {
+            if states.ESPDucts and contains(obj.Name, {
                 "duct", "duto", "vent"
             }) then
-                createESP(obj, Color3.fromRGB(255,170,40),
-                    obj.Name .. " [DUTO]")
+                createESP(
+                    obj,
+                    Color3.fromRGB(255, 170, 40),
+                    obj.Name .. " [DUTO]"
+                )
             end
         end
 
+        -- Preserva ESP de raridades.
         if obj:IsA("Model") or obj:IsA("BasePart") then
-            local rarity = getRarity(obj)
+            if not isMonster(obj) then
+                local rarity = getRarity(obj)
 
-            -- Evita marcar cada peca interna de um modelo.
-            local parentModel = obj:IsA("BasePart")
-                and obj:FindFirstAncestorOfClass("Model")
-
-            if rarity and rarityEnabled[rarity]
-                and not parentModel then
-
-                local price, weight = getItemInfo(obj)
-                local label = obj.Name .. " [" .. rarity .. "]"
-
-                if price ~= nil then
-                    label ..= " | Valor: " .. tostring(price)
+                if rarity and rarityEnabled[rarity] then
+                    createESP(
+                        obj,
+                        rarityColors[rarity],
+                        obj.Name .. " [" .. rarity .. "]"
+                    )
                 end
-
-                if weight ~= nil then
-                    label ..= " | Peso: " .. tostring(weight)
-                end
-
-                createESP(obj, rarityColors[rarity], label)
             end
         end
     end
 
     for obj in pairs(highlights) do
-        local p = obj and getPlayerFromModel(obj)
-        local monster = obj and isMonster(obj)
-        local rarity = obj and getRarity(obj)
+        local p = getPlayerFromModel(obj)
+        local monster = isMonster(obj)
+        local rarity = getRarity(obj)
+
+        local isDuct = states.ESPDucts
+            and contains(obj.Name, {"duct", "duto", "vent"})
 
         local keep =
-            (p and p ~= player and states.ESPPlayers)
-            or (monster and states.ESPMonsters)
-            or (rarity and rarityEnabled[rarity])
-            or (states.ESPDucts and obj
-                and contains(obj.Name, {"duct", "duto", "vent"}))
+            (monster and states.ESPMonsters)
+            or (not monster and p and p ~= player
+                and states.ESPPlayers)
+            or (not monster and rarity
+                and rarityEnabled[rarity])
+            or isDuct
 
         if not keep then
             removeESP(obj)
@@ -260,15 +150,49 @@ refreshESP = function()
     end
 end
 
--- PORTAS E DUTOS: PERCORRE MODELOS E PECAS INTERNAS
+-- PORTAS E ESCOTILHA DO DUTO
 
-local function matchesDoorOrDuct(obj)
-    return obj and contains(obj.Name, {
-        "door", "porta", "duct", "duto", "vent"
-    })
+local function hasDuctAncestor(obj)
+    local current = obj.Parent
+    local depth = 0
+
+    while current and depth < 7 do
+        if contains(current.Name, {
+            "duct", "duto", "vent"
+        }) then
+            return true
+        end
+
+        current = current.Parent
+        depth += 1
+    end
+
+    return false
 end
 
-local function hideContainer(obj)
+local function isDoorContainer(obj)
+    if not obj then return false end
+
+    if contains(obj.Name, {
+        "door", "porta"
+    }) then
+        return true
+    end
+
+    -- A tampa deve estar dentro de um duto.
+    if hasDuctAncestor(obj) and contains(obj.Name, {
+        "hatch", "cover", "lid",
+        "tampa", "escotilha",
+        "ventdoor", "ductdoor",
+        "door", "porta", "panel"
+    }) then
+        return true
+    end
+
+    return false
+end
+
+local function hideDoorContainer(obj)
     if not obj then return end
 
     if obj:IsA("BasePart") then
@@ -276,41 +200,49 @@ local function hideContainer(obj)
         return
     end
 
-    for _, child in ipairs(obj:GetDescendants()) do
-        if child:IsA("BasePart") then
-            hidePart(child)
+    for _, part in ipairs(obj:GetDescendants()) do
+        if part:IsA("BasePart") then
+            hidePart(part)
         end
     end
+end
+
+local function restoreHiddenParts()
+    for obj, data in pairs(hiddenParts) do
+        if obj and obj.Parent then
+            pcall(function()
+                obj.Transparency = data.Transparency
+                obj.LocalTransparencyModifier =
+                    data.LocalTransparencyModifier
+                obj.CanCollide = data.CanCollide
+                obj.CanTouch = data.CanTouch
+                obj.CanQuery = data.CanQuery
+            end)
+        end
+    end
+
+    table.clear(hiddenParts)
 end
 
 setDoors = function(enabled)
     states.RemoveDoors = enabled
 
-    if enabled then
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if matchesDoorOrDuct(obj) then
-                hideContainer(obj)
-            end
-        end
-    else
-        for obj, data in pairs(hiddenParts) do
-            if obj and obj.Parent then
-                pcall(function()
-                    obj.Transparency = data.Transparency
-                    obj.LocalTransparencyModifier =
-                        data.LocalTransparencyModifier
-                    obj.CanCollide = data.CanCollide
-                    obj.CanTouch = data.CanTouch
-                    obj.CanQuery = data.CanQuery
-                end)
-            end
-        end
+    if not enabled then
+        restoreHiddenParts()
+        return
+    end
 
-        table.clear(hiddenParts)
+    -- Primeiro procura portas e escotilhas específicas.
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            if isDoorContainer(obj) then
+                hideDoorContainer(obj)
+            end
+        end
     end
 end
 
--- NOVAS PECAS DENTRO DE PORTAS E DUTOS
+-- Acompanha novas peças replicadas.
 
 Workspace.DescendantAdded:Connect(function(obj)
     if not states.RemoveDoors then return end
@@ -318,146 +250,20 @@ Workspace.DescendantAdded:Connect(function(obj)
     task.defer(function()
         if not obj or not obj.Parent then return end
 
-        if obj:IsA("BasePart") then
-            local current = obj
-            local depth = 0
+        local current = obj
+        local depth = 0
 
-            while current and depth < 8 do
-                if matchesDoorOrDuct(current) then
-                    hidePart(obj)
-                    break
-                end
-
-                current = current.Parent
-                depth += 1
+        while current and depth < 8 do
+            if isDoorContainer(current) then
+                hideDoorContainer(current)
+                return
             end
-        elseif matchesDoorOrDuct(obj) then
-            hideContainer(obj)
+
+            current = current.Parent
+            depth += 1
         end
     end)
 end)
 
--- COLETOR: MONSTROS E ITENS COM CLASSIFICACAO MELHORADA
-
-scanObject = function(obj, eventName)
-    if not obj then return end
-
-    local ok, path = pcall(function()
-        return obj:GetFullName()
-    end)
-
-    if not ok then return end
-
-    local category = "Objeto"
-
-    if isMonster(obj) then
-        category = "Monstro"
-    elseif obj:IsA("ProximityPrompt") then
-        category = "Interacao"
-    elseif isItemObject(obj) then
-        category = "Item"
-    elseif obj:IsA("Model") then
-        category = "Modelo"
-    elseif obj:IsA("BasePart") then
-        category = "Peca"
-    end
-
-    local price, weight = getItemInfo(obj)
-
-    local data = {
-        Name = obj.Name,
-        Class = obj.ClassName,
-        Path = path,
-        Event = eventName or "Detectado",
-        Attributes = getAttributes(obj),
-        Rarity = tostring(getRarity(obj) or "Nao detectada"),
-        Price = tostring(price or "Nao detectado"),
-        Weight = tostring(weight or "Nao detectado")
-    }
-
-    if obj:IsA("ProximityPrompt") then
-        data.ActionText = obj.ActionText
-        data.ObjectText = obj.ObjectText
-        data.HoldDuration = obj.HoldDuration
-        data.MaxDistance = obj.MaxActivationDistance
-        data.Enabled = obj.Enabled
-    end
-
-    if obj:IsA("BasePart") then
-        data.Position = tostring(obj.Position)
-    end
-
-    addRecord(category, data)
-end
-
--- RELATORIO REAL NA CAIXA DE TEXTO
-
-exportData = function()
-    local output = {
-        "====================================",
-        "ROUBE OU MORRA V11 - RELATORIO",
-        "Feito por Tales",
-        "Data: " .. os.date("%d/%m/%Y %H:%M:%S"),
-        "Varreduras: " .. tostring(totalScans),
-        "Registros: " .. tostring(#records),
-        "===================================="
-    }
-
-    local counts = {
-        Monstro = 0,
-        Item = 0,
-        Interacao = 0
-    }
-
-    for _, data in ipairs(records) do
-        if counts[data.Category] ~= nil then
-            counts[data.Category] += 1
-        end
-    end
-
-    table.insert(output, "MONSTROS REGISTRADOS: " .. counts.Monstro)
-    table.insert(output, "ITENS REGISTRADOS: " .. counts.Item)
-    table.insert(output, "INTERACOES: " .. counts.Interacao)
-
-    for i, data in ipairs(records) do
-        table.insert(output, "")
-        table.insert(output, "REGISTRO " .. i)
-
-        for key, value in pairs(data) do
-            if type(value) == "table" then
-                table.insert(output, key .. ":")
-
-                for k, v in pairs(value) do
-                    table.insert(output, "  " .. k .. " = " .. tostring(v))
-                end
-            else
-                table.insert(output,
-                    key .. ": " .. tostring(value))
-            end
-        end
-    end
-
-    return table.concat(output, "\n")
-end
-
-copyData = function()
-    local report = exportData()
-
-    if dataBox then
-        dataBox.Text = report
-    end
-
-    local clipboard = setclipboard or toclipboard
-
-    if clipboard then
-        local ok = pcall(clipboard, report)
-        if ok then
-            return true
-        end
-    end
-
-    return false
-end
-
-print("ROUBE OU MORRA V11 - PATCH ATIVO")
+print("ROUBE OU MORRA V12 - CORRECOES CARREGADAS")
 print("Feito por Tales")
