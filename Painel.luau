@@ -1,12 +1,16 @@
--- ROUBE OU MORRA
--- Painel demonstrativo em Luau
+--==================================================
+-- ROUBE OU MORRA | DEVELOPMENT PANEL
+-- Linguagem: Luau
+--==================================================
 
 local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
 local UIS = game:GetService("UserInputService")
 
 local Player = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild("PlayerGui")
 
+-- CONFIGURAÇÕES
 local Config = {
     BagLimit = 80,
 
@@ -20,23 +24,43 @@ local Config = {
     },
 
     Maps = {
-        "Hospital",
-        "Mapa 2",
-        "Mapa 3"
+        "Hospital"
     }
 }
 
 local States = {}
 
+local OriginalLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    GlobalShadows = Lighting.GlobalShadows
+}
+
+-- CORES
+local Colors = {
+    Background = Color3.fromRGB(15, 17, 23),
+    Sidebar = Color3.fromRGB(20, 23, 31),
+    Panel = Color3.fromRGB(27, 30, 40),
+    Button = Color3.fromRGB(37, 41, 53),
+    Accent = Color3.fromRGB(90, 125, 255),
+    Green = Color3.fromRGB(45, 175, 110),
+    Red = Color3.fromRGB(210, 65, 75),
+    White = Color3.fromRGB(245, 245, 250),
+    Gray = Color3.fromRGB(145, 150, 165)
+}
+
+-- GUI
 local GUI = Instance.new("ScreenGui")
-GUI.Name = "ROM_Dashboard"
+GUI.Name = "ROM_Panel"
 GUI.ResetOnSpawn = false
+GUI.DisplayOrder = 999
 GUI.Parent = PlayerGui
 
+-- JANELA PRINCIPAL
 local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(330, 480)
-Main.Position = UDim2.new(0.5, -165, 0.5, -240)
-Main.BackgroundColor3 = Color3.fromRGB(20, 20, 27)
+Main.Size = UDim2.fromOffset(650, 440)
+Main.Position = UDim2.new(0.5, -325, 0.5, -220)
+Main.BackgroundColor3 = Colors.Background
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.Parent = GUI
@@ -44,8 +68,12 @@ Main.Parent = GUI
 Instance.new("UICorner", Main).CornerRadius =
     UDim.new(0, 12)
 
--- ARRASTAR JANELA
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(55, 60, 80)
+MainStroke.Thickness = 1
+MainStroke.Parent = Main
 
+-- ARRASTAR JANELA
 local dragging = false
 local dragStart
 local startPosition
@@ -85,158 +113,229 @@ UIS.InputEnded:Connect(function(input)
 end)
 
 -- CABEÇALHO
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 55)
+Header.BackgroundColor3 = Colors.Sidebar
+Header.BorderSizePixel = 0
+Header.Parent = Main
 
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -45, 0, 45)
-Title.Position = UDim2.fromOffset(10, 0)
+Title.Size = UDim2.new(1, -120, 1, 0)
+Title.Position = UDim2.fromOffset(18, 0)
 Title.BackgroundTransparency = 1
 Title.Text = "ROUBE OU MORRA"
-Title.TextColor3 = Color3.new(1, 1, 1)
+Title.TextColor3 = Colors.White
+Title.TextSize = 19
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 18
-Title.Parent = Main
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
 
-local Close = Instance.new("TextButton")
-Close.Size = UDim2.fromOffset(35, 35)
-Close.Position = UDim2.new(1, -40, 0, 5)
-Close.Text = "X"
-Close.TextColor3 = Color3.new(1, 1, 1)
-Close.BackgroundColor3 = Color3.fromRGB(150, 45, 45)
-Close.Font = Enum.Font.GothamBold
-Close.Parent = Main
+local Minimize = Instance.new("TextButton")
+Minimize.Size = UDim2.fromOffset(38, 34)
+Minimize.Position = UDim2.new(1, -48, 0, 10)
+Minimize.BackgroundColor3 = Colors.Button
+Minimize.Text = "—"
+Minimize.TextColor3 = Colors.White
+Minimize.TextSize = 22
+Minimize.Font = Enum.Font.GothamBold
+Minimize.Parent = Header
 
-Close.MouseButton1Click:Connect(function()
-    GUI:Destroy()
-end)
+Instance.new("UICorner", Minimize).CornerRadius =
+    UDim.new(0, 7)
 
--- STATUS
+-- MENU LATERAL
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 165, 1, -55)
+Sidebar.Position = UDim2.fromOffset(0, 55)
+Sidebar.BackgroundColor3 = Colors.Sidebar
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = Main
+
+local SideLayout = Instance.new("UIListLayout")
+SideLayout.Padding = UDim.new(0, 8)
+SideLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+SideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SideLayout.Parent = Sidebar
+
+local SidePadding = Instance.new("UIPadding")
+SidePadding.PaddingTop = UDim.new(0, 15)
+SidePadding.Parent = Sidebar
+
+-- CONTEÚDO
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -180, 1, -70)
+Content.Position = UDim2.fromOffset(175, 65)
+Content.BackgroundTransparency = 1
+Content.Parent = Main
+
+local PageTitle = Instance.new("TextLabel")
+PageTitle.Size = UDim2.new(1, 0, 0, 35)
+PageTitle.BackgroundTransparency = 1
+PageTitle.Text = "Dashboard"
+PageTitle.TextColor3 = Colors.White
+PageTitle.Font = Enum.Font.GothamBold
+PageTitle.TextSize = 19
+PageTitle.TextXAlignment = Enum.TextXAlignment.Left
+PageTitle.Parent = Content
 
 local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, -20, 0, 25)
-Status.Position = UDim2.fromOffset(10, 45)
+Status.Size = UDim2.new(1, 0, 0, 25)
+Status.Position = UDim2.new(0, 0, 1, -25)
 Status.BackgroundTransparency = 1
-Status.Text = "Painel iniciado"
-Status.TextColor3 = Color3.fromRGB(100, 220, 140)
-Status.TextSize = 12
+Status.Text = "Sistema iniciado"
+Status.TextColor3 = Colors.Green
 Status.Font = Enum.Font.Gotham
-Status.Parent = Main
+Status.TextSize = 12
+Status.TextXAlignment = Enum.TextXAlignment.Left
+Status.Parent = Content
 
--- ÁREA DE CONTEÚDO
+local Pages = {}
 
-local Scroll = Instance.new("ScrollingFrame")
-Scroll.Size = UDim2.new(1, -20, 1, -85)
-Scroll.Position = UDim2.fromOffset(10, 75)
-Scroll.BackgroundTransparency = 1
-Scroll.BorderSizePixel = 0
-Scroll.ScrollBarThickness = 4
-Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-Scroll.CanvasSize = UDim2.new()
-Scroll.Parent = Main
+local function CreatePage(name)
+    local Page = Instance.new("ScrollingFrame")
+    Page.Name = name
+    Page.Size = UDim2.new(1, 0, 1, -75)
+    Page.Position = UDim2.fromOffset(0, 40)
+    Page.BackgroundTransparency = 1
+    Page.BorderSizePixel = 0
+    Page.ScrollBarThickness = 3
+    Page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Page.CanvasSize = UDim2.new()
+    Page.Visible = false
+    Page.Parent = Content
 
-local Layout = Instance.new("UIListLayout")
-Layout.Padding = UDim.new(0, 6)
-Layout.Parent = Scroll
+    local Layout = Instance.new("UIListLayout")
+    Layout.Padding = UDim.new(0, 8)
+    Layout.Parent = Page
 
-local function Section(name)
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -5, 0, 28)
-    label.BackgroundTransparency = 1
-    label.Text = name
-    label.TextColor3 = Color3.fromRGB(100, 170, 255)
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 13
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = Scroll
+    Pages[name] = Page
+    return Page
 end
 
-local function Button(name, callback)
-    local button = Instance.new("TextButton")
-    button.Size = UDim2.new(1, -5, 0, 36)
-    button.BackgroundColor3 = Color3.fromRGB(42, 42, 52)
-    button.TextColor3 = Color3.new(1, 1, 1)
-    button.Text = name
-    button.Font = Enum.Font.GothamSemibold
-    button.TextSize = 12
-    button.Parent = Scroll
+local function CreateSection(page, name)
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -5, 0, 30)
+    Label.BackgroundTransparency = 1
+    Label.Text = name
+    Label.TextColor3 = Colors.Accent
+    Label.TextSize = 13
+    Label.Font = Enum.Font.GothamBold
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = page
+end
 
-    Instance.new("UICorner", button).CornerRadius =
+local function CreateButton(page, name, callback)
+    local Button = Instance.new("TextButton")
+    Button.Size = UDim2.new(1, -8, 0, 39)
+    Button.BackgroundColor3 = Colors.Button
+    Button.TextColor3 = Colors.White
+    Button.Text = name
+    Button.TextSize = 12
+    Button.Font = Enum.Font.GothamSemibold
+    Button.Parent = page
+
+    Instance.new("UICorner", Button).CornerRadius =
         UDim.new(0, 7)
 
-    button.MouseButton1Click:Connect(callback)
+    Button.MouseButton1Click:Connect(callback)
 
-    return button
+    return Button
 end
 
-local function Toggle(key, name)
+local function CreateToggle(page, key, name, callback)
     States[key] = false
 
-    local button
+    local Button = CreateButton(
+        page,
+        name .. "     OFF",
+        function()
+            States[key] = not States[key]
 
-    button = Button(name .. " [OFF]", function()
-        States[key] = not States[key]
+            Button.Text = name ..
+                (States[key] and "     ON" or "     OFF")
 
-        button.Text = name ..
-            (States[key] and " [ON]" or " [OFF]")
+            Button.BackgroundColor3 = States[key]
+                and Colors.Green
+                or Colors.Button
 
-        button.BackgroundColor3 = States[key]
-            and Color3.fromRGB(35, 105, 65)
-            or Color3.fromRGB(42, 42, 52)
+            if callback then
+                callback(States[key])
+            end
+        end
+    )
 
-        Status.Text = name ..
-            (States[key] and " ativado" or " desativado")
-    end)
+    return Button
 end
 
--- IDENTIFICAÇÃO DEMONSTRATIVA
+-- PÁGINAS
+local Dashboard = CreatePage("Dashboard")
+local ESP = CreatePage("ESP")
+local Farm = CreatePage("Farm")
+local Settings = CreatePage("Settings")
 
-Section("01 - ESP DEMONSTRATIVO")
-Toggle("Players", "Players - Azul")
-Toggle("Monster", "Monstro - Vermelho")
-Toggle("Items", "Itens por raridade")
+-- DASHBOARD
+CreateSection(Dashboard, "INFORMAÇÕES")
 
--- CONTROLES
+CreateButton(Dashboard, "Atualizar jogadores", function()
+    Status.Text = "Jogadores: " .. #Players:GetPlayers()
+end)
 
-Section("02 - CONFIGURAÇÕES")
-Toggle("PlayerStamina", "Estamina - Jogador")
-Toggle("MonsterStamina", "Estamina - Monstro")
-Toggle("AutoCollect", "Auto Collect")
-Toggle("ExitFinder", "Localizador de saída")
+CreateButton(Dashboard, "Verificar versão", function()
+    Status.Text = "ROM Panel - Luau"
+end)
 
--- MAPAS
+-- ESP
+CreateSection(ESP, "IDENTIFICAÇÃO VISUAL")
 
-Section("03 - MAPAS")
+CreateButton(ESP, "ESP Players - Azul", function()
+    Status.Text = "Integração de ESP requer dados autorizados"
+end)
 
-local selectedMap = nil
+CreateButton(ESP, "ESP Monstro - Vermelho", function()
+    Status.Text = "Integração de ESP requer dados autorizados"
+end)
 
-for _, mapName in ipairs(Config.Maps) do
-    Button("Selecionar " .. mapName, function()
-        selectedMap = mapName
-        Status.Text = "Mapa selecionado: " .. mapName
-    end)
-end
+CreateButton(ESP, "ESP Itens e raridades", function()
+    Status.Text = "Integração de itens pendente"
+end)
 
--- RARIDADES
+CreateSection(ESP, "RARIDADES")
 
-Section("04 - PRIORIDADE DOS ITENS")
-
-for index, rarity in ipairs(Config.Rarities) do
-    Button(index .. " - " .. rarity, function()
+for _, rarity in ipairs(Config.Rarities) do
+    CreateButton(ESP, rarity, function()
         Status.Text = "Raridade selecionada: " .. rarity
     end)
 end
 
--- MOCHILA
+-- FARM
+CreateSection(Farm, "AUTO FARM")
 
-Section("05 - MONITORAMENTO DA MOCHILA")
+CreateButton(Farm, "Auto Farm Inteligente", function()
+    Status.Text = "Integração com jogo pendente"
+end)
 
-local currentWeight = 0
-local maximumWeight = 100
+CreateButton(Farm, "Auto Collect", function()
+    Status.Text = "Integração com coleta pendente"
+end)
 
-local function UpdateBag(weight, capacity)
-    currentWeight = math.max(0, weight)
-    maximumWeight = math.max(1, capacity)
+CreateSection(Farm, "MAPAS")
 
-    local percentage = currentWeight / maximumWeight * 100
+local SelectedMap = nil
+
+for _, map in ipairs(Config.Maps) do
+    CreateButton(Farm, "Selecionar " .. map, function()
+        SelectedMap = map
+        Status.Text = "Mapa: " .. map
+    end)
+end
+
+CreateSection(Farm, "MONITORAMENTO")
+
+local CurrentWeight = 0
+local MaximumWeight = 100
+
+CreateButton(Farm, "Verificar mochila", function()
+    local percentage = CurrentWeight / MaximumWeight * 100
 
     Status.Text = string.format(
         "Mochila: %.1f%%",
@@ -244,22 +343,85 @@ local function UpdateBag(weight, capacity)
     )
 
     if percentage >= Config.BagLimit then
-        Status.Text = "LIMITE DE 80% ATINGIDO"
+        Status.Text = "Limite de 80% atingido"
     end
-end
-
-Button("Verificar mochila", function()
-    UpdateBag(currentWeight, maximumWeight)
 end)
 
--- VISUAL
+-- CONFIGURAÇÕES
+CreateSection(Settings, "ILUMINAÇÃO")
 
-Section("06 - VISUAL")
-Toggle("Brightness", "Brilho máximo")
-Toggle("Objects", "Portas e dutos")
+CreateToggle(Settings, "Brightness", "Brilho máximo", function(enabled)
+    if enabled then
+        Lighting.Brightness = 3
+        Lighting.ClockTime = 14
+        Lighting.GlobalShadows = false
+    else
+        Lighting.Brightness = OriginalLighting.Brightness
+        Lighting.ClockTime = OriginalLighting.ClockTime
+        Lighting.GlobalShadows = OriginalLighting.GlobalShadows
+    end
+end)
 
--- FINALIZAÇÃO
+CreateSection(Settings, "OUTROS")
 
-print("ROM Dashboard iniciado.")
-print("Ambiente: Luau")
-print("Modo: Demonstrativo")
+CreateButton(Settings, "Portas e dutos", function()
+    Status.Text = "Integração visual pendente"
+end)
+
+CreateButton(Settings, "Estamina do jogador", function()
+    Status.Text = "Integração com sistema de estamina pendente"
+end)
+
+CreateButton(Settings, "Estamina do monstro", function()
+    Status.Text = "Integração com sistema de estamina pendente"
+end)
+
+-- NAVEGAÇÃO
+local function CreateTab(name, page)
+    local Button = Instance.new("TextButton")
+
+    Button.Size = UDim2.new(1, -16, 0, 38)
+    Button.BackgroundColor3 = Colors.Button
+    Button.Text = name
+    Button.TextColor3 = Colors.White
+    Button.TextSize = 12
+    Button.Font = Enum.Font.GothamSemibold
+    Button.Parent = Sidebar
+
+    Instance.new("UICorner", Button).CornerRadius =
+        UDim.new(0, 7)
+
+    Button.MouseButton1Click:Connect(function()
+        for pageName, object in pairs(Pages) do
+            object.Visible = object == page
+        end
+
+        PageTitle.Text = name
+        Status.Text = "Categoria: " .. name
+    end)
+end
+
+CreateTab("Dashboard", Dashboard)
+CreateTab("ESP", ESP)
+CreateTab("Auto Farm", Farm)
+CreateTab("Configurações", Settings)
+
+Dashboard.Visible = true
+
+-- MINIMIZAR / RESTAURAR
+local minimized = false
+
+Minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+
+    Sidebar.Visible = not minimized
+    Content.Visible = not minimized
+
+    Main.Size = minimized
+        and UDim2.fromOffset(250, 55)
+        or UDim2.fromOffset(650, 440)
+
+    Minimize.Text = minimized and "+" or "—"
+end)
+
+print("ROUBE OU MORRA - Interface carregada")
