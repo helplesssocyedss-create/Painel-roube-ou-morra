@@ -1,8 +1,8 @@
 --==============================================================
--- ROUBE OU MORRA V25 | Feito por Tales
--- ESP incremental | Coleta direcionada | Diagnóstico de stamina
--- Monitoramento de entidades/flashbang | Fila de envio concorrente
--- Otimização de desempenho mobile
+-- ROUBE OU MORRA V26 | Feito por Tales
+-- ESP incremental | ClassificaÃ§Ã£o rigorosa de entidades
+-- ProteÃ§Ã£o contra falsos positivos visuais | Coleta otimizada
+-- OtimizaÃ§Ã£o de desempenho mobile
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -52,10 +52,10 @@ local monsterNames = {
 }
 
 local highlights,labels = {},{}
-local espFolder = Workspace:FindFirstChild("TalesESP_V25_Folder")
+local espFolder = Workspace:FindFirstChild("TalesESP_V26_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V25_Folder"
+    espFolder.Name = "TalesESP_V26_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -119,40 +119,60 @@ local function getPlayerFromModel(model)
     end
 end
 
+local knownEntityKinds = {
+    tenant=true, hollow=true, locust=true, rictus=true, wendell=true,
+    mimic=true, thetenant=true, thehollow=true, thelocust=true,
+    therictus=true, thewendell=true
+}
+
+local function normalizedEntityKind(value)
+    if type(value)~="string" then return nil end
+    local normalized=string.lower(value):gsub("[%s_%-]","")
+    if knownEntityKinds[normalized] then return normalized end
+    return nil
+end
+
+local function hasExplicitEntityFlag(container)
+    if not container then return false end
+    for _,key in ipairs({"IsEntity","IsMonster","IsEnemy","Monster","Enemy"}) do
+        local value=container:GetAttribute(key)
+        if value==true or value==1 then return true end
+        if type(value)=="string" then
+            local v=string.lower(value)
+            if v=="true" or v=="1" or v=="yes" then return true end
+        end
+    end
+    for _,key in ipairs({"EntityKind","EntityType","EntitySelected","Role","TeamRole","CharacterType","NPCType","Class","CharacterClass"}) do
+        if normalizedEntityKind(container:GetAttribute(key)) then return true end
+    end
+    return false
+end
+
 local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
 
-    -- Primeiro: atributos sem depender do nome exibido (inclui player que virou entidade).
-    local owner = getPlayerFromModel(model)
-    local containers = {model}
-    if owner then table.insert(containers,owner) end
-
-    local entityKeys = {
-        "IsEntity","IsMonster","IsEnemy","Monster","Enemy",
-        "EntityKind","EntityType","EntitySelected","EntityStage",
-        "Role","TeamRole","CharacterType","NPCType","Class","CharacterClass"
-    }
-    for _,container in ipairs(containers) do
-        for _,key in ipairs(entityKeys) do
-            local value = container:GetAttribute(key)
-            if value == true then return true end
-            if type(value)=="string" and value~="" then
-                local normalized = string.lower(value)
-                if key=="IsEntity" or key=="IsMonster" or key=="IsEnemy"
-                    or key=="Monster" or key=="Enemy" then
-                    if normalized=="true" or normalized=="1" then return true end
-                elseif contains(normalized,{
-                    "monster","monstro","enemy","inimigo","creature",
-                    "hollow","locust","entity","entidade","hunter"
-                }) then
+    local owner=getPlayerFromModel(model)
+    -- Para personagens de jogadores, nÃ£o usamos nome, texto genÃ©rico, classe ou
+    -- atributos de estado isolados. Exigimos uma marca explÃ­cita de entidade.
+    if owner then
+        if hasExplicitEntityFlag(model) or hasExplicitEntityFlag(owner) then
+            return true
+        end
+        local ok,tags=pcall(function() return CollectionService:GetTags(model) end)
+        if ok then
+            for _,tag in ipairs(tags) do
+                local t=string.lower(tostring(tag)):gsub("[%s_%-]","")
+                if t=="entity" or t=="monster" or t=="enemy" or t=="isentity" then
                     return true
                 end
             end
         end
+        return false
     end
 
-    -- Tags são uma segunda fonte; nomes são apenas fallback, nunca filtro exclusivo.
-    local ok,tags = pcall(function() return CollectionService:GetTags(model) end)
+    if hasExplicitEntityFlag(model) then return true end
+
+    local ok,tags=pcall(function() return CollectionService:GetTags(model) end)
     if ok then
         for _,tag in ipairs(tags) do
             if contains(tag,{"monster","enemy","monstro","inimigo","creature","entity"}) then
@@ -163,21 +183,32 @@ local function isMonster(model)
 
     if contains(model.Name,monsterNames) then return true end
 
-    -- Values replicados dentro do modelo/personagem.
-    local valueObjects = (owner or model:FindFirstChildOfClass("Humanoid"))
-        and model:GetDescendants() or model:GetChildren()
-    for _,obj in ipairs(valueObjects) do
+    -- Fallback por ValueBase somente para NPCs, nunca para personagens de Players.
+    for _,obj in ipairs(model:GetDescendants()) do
         if obj:IsA("BoolValue") and obj.Value
             and contains(obj.Name,{"monster","enemy","entity","monstro","inimigo"}) then
             return true
         elseif obj:IsA("StringValue")
-            and contains(obj.Name,{"role","class","type","monster","entity","team"}) then
-            if contains(obj.Value,{"monster","monstro","enemy","inimigo","creature","entity","hollow","locust"}) then
-                return true
-            end
+            and contains(obj.Name,{"role","class","type","monster","entity","team"})
+            and normalizedEntityKind(obj.Value) then
+            return true
         end
     end
     return false
+end
+
+local function getEntityActivitySuffix(model)
+    if not model then return "" end
+    local state=tostring(model:GetAttribute("State") or "")
+    local killing=model:GetAttribute("Killing")
+    local lungeUntil=tonumber(model:GetAttribute("LungeUntil"))
+    local now=os.time()
+    if killing==true or tostring(killing):lower()=="true" then
+        return " [ATAQUE]"
+    end
+    if lungeUntil and lungeUntil>now then return " [AVANCO]" end
+    if state:lower()=="chase" or state:lower()=="hunt" then return " [PERSEGUINDO]" end
+    return ""
 end
 
 local function getRarity(obj)
@@ -220,9 +251,9 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V25"
+        h.Name = "TalesESP_V26"
         h.Adornee = obj
-        h.FillTransparency = 0.88
+        h.FillTransparency = 1
         h.OutlineTransparency = 0
         h.Parent = espFolder
         highlights[obj] = h
@@ -251,7 +282,7 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V25"
+        bill.Name = "TalesESPLabel_V26"
         bill.AlwaysOnTop = true
         bill.Size = small and UDim2.fromOffset(118,18)
             or UDim2.fromOffset(104,16)
@@ -278,8 +309,8 @@ local function createESP(obj,color,textValue,small)
     bill.TextLabel.TextColor3 = color
 end
 
--- Identifica somente o próprio objeto duto, não qualquer peça
--- que esteja próxima ou seja descendente dele.
+-- Identifica somente o prÃ³prio objeto duto, nÃ£o qualquer peÃ§a
+-- que esteja prÃ³xima ou seja descendente dele.
 local function isDuctRoot(obj)
     if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then
         return false
@@ -323,7 +354,7 @@ end
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
-    -- Uma varredura inicial única; atualizações seguintes são incrementais.
+    -- Uma varredura inicial Ãºnica; atualizaÃ§Ãµes seguintes sÃ£o incrementais.
     for index,obj in ipairs(Workspace:GetDescendants()) do
         registerESPCandidate(obj)
         if index%350==0 then task.wait() end
@@ -367,13 +398,17 @@ local function refreshESP()
                 local plr = getPlayerFromModel(obj)
 
                 if plr and plr~=player and states.ESPMonsters and isMonster(obj) then
-                    createESP(obj,Color3.fromRGB(255,35,35),plr.Name.." [ENTIDADE]",false)
+                    createESP(obj,Color3.fromRGB(255,35,35),plr.Name..getEntityActivitySuffix(obj),false)
                     keep[obj] = true
                 elseif plr and plr~=player and states.ESPPlayers then
                     createESP(obj,Color3.fromRGB(40,140,255),plr.Name,false)
                     keep[obj] = true
                 elseif states.ESPMonsters and isMonster(obj) then
-                    createESP(obj,Color3.fromRGB(255,35,35),obj.Name,false)
+                    local displayName=obj:GetAttribute("DisplayName")
+                    or obj:GetAttribute("EntityKind")
+                    or obj:GetAttribute("EntitySelected")
+                    or obj.Name
+                    createESP(obj,Color3.fromRGB(255,35,35),tostring(displayName)..getEntityActivitySuffix(obj),false)
                     keep[obj] = true
                 end
             end
@@ -624,7 +659,7 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- COLETA INSTANTÂNEA
+-- COLETA INSTANTÃ‚NEA
 --==============================================================
 
 local function setInstant(enabled)
@@ -668,8 +703,8 @@ end
 local function queueReport(entry,key)
     if not states.DataCollector then return end
 
-    -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
-    -- uma chave própria, em vez de bloquear para sempre pelo caminho.
+    -- A mesma instÃ¢ncia pode mudar de estado; cada versÃ£o do conteÃºdo recebe
+    -- uma chave prÃ³pria, em vez de bloquear para sempre pelo caminho.
     local versionedKey = tostring(key).."|"..reportFingerprint(entry)
     if sentKeys[versionedKey] or queuedKeys[versionedKey] then return end
 
@@ -719,14 +754,14 @@ local function sendOne(item)
         return true,"HTTP "..code
     end
 
-    if code==409 then return true,"Registro já existente" end
+    if code==409 then return true,"Registro jÃ¡ existente" end
 
     if code==401 or code==403 then
         return false,"Token recusado (HTTP "..code..")"
     elseif code==404 then
-        return false,"Função ingest-report não encontrada (404)"
+        return false,"FunÃ§Ã£o ingest-report nÃ£o encontrada (404)"
     elseif code==429 then
-        return false,"Limite de requisições (429)"
+        return false,"Limite de requisiÃ§Ãµes (429)"
     elseif code>=500 then
         return false,"Supabase HTTP "..code..": "..responseBody
     end
@@ -742,7 +777,7 @@ local function flushReports()
         return
     end
     if COLLECTOR_TOKEN=="" then
-        lastHTTP = "Token não informado"
+        lastHTTP = "Token nÃ£o informado"
         if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
@@ -956,7 +991,7 @@ local function scanGame()
 end
 
 --==============================================================
--- V25: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
+-- V26: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
 --==============================================================
 
 local watchedPlayers = setmetatable({}, {__mode="k"})
@@ -1049,7 +1084,7 @@ local function staminaSnapshot(reason)
         for _,obj in ipairs(char:GetDescendants()) do
             if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
                 or (obj:IsA("ValueBase") and contains(obj.Name,{
-                    "stamina","sprint","energy","resist","endurance","folego","fôlego"
+                    "stamina","sprint","energy","resist","endurance","folego","fÃ´lego"
                 })) then
                 local ok,value=pcall(function() return obj.Value end)
                 if ok then statValues[safePath(obj)]=tostring(value) end
@@ -1068,7 +1103,7 @@ local function staminaSnapshot(reason)
     end
 
     -- A barra pode ser apenas visual. Durante corrida/parada, compara alguns
-    -- elementos de HUD e relata mudanças de tamanho/cor/texto sem assumir nomes.
+    -- elementos de HUD e relata mudanÃ§as de tamanho/cor/texto sem assumir nomes.
     if reason=="Running" or reason=="Stopped" then
         if now-lastHudSample>=1.5 then
             lastHudSample=now
@@ -1113,7 +1148,7 @@ local function watchStatObject(obj,source)
     if not obj or not obj:IsA("ValueBase") or watchedStats[obj] then return end
     local isNumeric=obj:IsA("NumberValue") or obj:IsA("IntValue")
     local named=contains(obj.Name,{
-        "stamina","sprint","energy","resist","endurance","folego","fôlego",
+        "stamina","sprint","energy","resist","endurance","folego","fÃ´lego",
         "role","entity","monster","enemy","team","class","type","flash"
     })
     if not isNumeric and not named then return end
@@ -1354,7 +1389,7 @@ end
 local function discoverExistingEntities()
     if entityDiscoveryDone then return end
     entityDiscoveryDone=true
-    -- Percorre apenas contêineres e Models: não inspeciona cada peça/objeto do mapa.
+    -- Percorre apenas contÃªineres e Models: nÃ£o inspeciona cada peÃ§a/objeto do mapa.
     local visited=0
     local lastYield=0
     local function walk(container,depth)
@@ -1388,8 +1423,8 @@ Workspace.DescendantAdded:Connect(function(obj)
 
     if obj:IsA("Tool") then watchTool(obj) end
 
-    -- Sem depender do nome: objetos que surgem logo após ativar uma ferramenta
-    -- são candidatos a projétil/artefato lançado. Limite evita capturar o mapa inteiro.
+    -- Sem depender do nome: objetos que surgem logo apÃ³s ativar uma ferramenta
+    -- sÃ£o candidatos a projÃ©til/artefato lanÃ§ado. Limite evita capturar o mapa inteiro.
     if states.DataCollector and os.clock()<=recentToolUseUntil
         and recentToolSpawnCount<24
         and (obj:IsA("Model") or obj:IsA("BasePart")) then
@@ -1399,14 +1434,14 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- RELATÓRIO MANUAL INTEGRAL
+-- RELATÃ“RIO MANUAL INTEGRAL
 --==============================================================
 
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V25 - RELATORIO",
-        "Monitoramento de personagem/função e eventos replicados",
+        "ROUBE OU MORRA V26 - RELATORIO",
+        "Monitoramento de personagem/funÃ§Ã£o e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
@@ -1453,11 +1488,11 @@ local function copyFullReport()
     if showPage then showPage("Dados") end
 
     if statusLabel then
-        statusLabel.Text = "Gerando relatório completo..."
+        statusLabel.Text = "Gerando relatÃ³rio completo..."
     end
 
     task.spawn(function()
-        -- Se ainda não existe nenhum registro, faz uma coleta manual.
+        -- Se ainda nÃ£o existe nenhum registro, faz uma coleta manual.
         if #records==0 then
             scanGame()
         end
@@ -1483,20 +1518,20 @@ local function copyFullReport()
             if ok then
                 if statusLabel then
                     statusLabel.Text =
-                        "Relatório copiado! "
+                        "RelatÃ³rio copiado! "
                         ..#full.." caracteres | "
                         ..#records.." registros"
                 end
             else
                 if statusLabel then
                     statusLabel.Text =
-                        "Relatório exibido abaixo. Clipboard: "..tostring(err)
+                        "RelatÃ³rio exibido abaixo. Clipboard: "..tostring(err)
                 end
             end
         else
             if statusLabel then
                 statusLabel.Text =
-                    "Relatório exibido abaixo. Selecione o texto para copiar."
+                    "RelatÃ³rio exibido abaixo. Selecione o texto para copiar."
             end
         end
     end)
@@ -1533,12 +1568,12 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V25
+-- ANTI-FLASH V26
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
     return contains(obj.Name,{
-        "flash","blind","flashbang","clarão",
+        "flash","blind","flashbang","clarÃ£o",
         "stunflash","whiteout","flash_effect","blindness"
     })
 end
@@ -1571,12 +1606,13 @@ local function inspectFlashObject(obj)
 
         flashEffect = effectLooksLikeFlash(obj)
 
-        -- Alguns jogos usam ColorCorrection com nome genérico.
-        if obj:IsA("ColorCorrectionEffect") then
+        -- Efeitos com nome genÃ©rico sÃ³ sÃ£o considerados flash durante a janela
+        -- curta apÃ³s ativaÃ§Ã£o de ferramenta; brilho alto sozinho nÃ£o Ã© evidÃªncia.
+        if not flashEffect and obj:IsA("ColorCorrectionEffect")
+            and os.clock()<=recentToolUseUntil then
             pcall(function()
-                if obj.Brightness>0.65 then
-                    flashEffect = true
-                end
+                flashEffect = obj.Brightness>0.65
+                    or obj.Contrast>0.65 or obj.Saturation < -0.75
             end)
         end
     end
@@ -1626,7 +1662,8 @@ local function inspectFlashObject(obj)
                     reportedFlashObjects[obj]=true
                     makeObjectReport(obj,"FullScreenWhiteFlashOverlayDetected")
                 end
-                if states.AntiFlash then
+                if states.AntiFlash and (effectLooksLikeFlash(obj)
+                    or os.clock()<=recentToolUseUntil) then
                     if savedOverlays[obj]==nil then savedOverlays[obj] = obj.Visible end
                     pcall(function() obj.Visible=false end)
                 end
@@ -1708,14 +1745,14 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V25: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
+-- STAMINA V26: DIAGNÃ“STICO DIRECIONADO E ALTERAÃ‡ÃƒO LOCAL LIMITADA
 --==============================================================
 
 local staminaOriginals = {}
 local function isStaminaName(name)
     return contains(name,{
         "stamina","sprint","energy","energia",
-        "resist","endurance","folego","fôlego"
+        "resist","endurance","folego","fÃ´lego"
     })
 end
 
@@ -1741,8 +1778,8 @@ local function findStaminaObjects()
             if candidate and not seen[obj] then
                 seen[obj]=true
                 table.insert(found,obj)
-                -- Só altera NumberValue/IntValue explicitamente identificados.
-                -- Não faz require() nem modifica upvalues de módulos desconhecidos.
+                -- SÃ³ altera NumberValue/IntValue explicitamente identificados.
+                -- NÃ£o faz require() nem modifica upvalues de mÃ³dulos desconhecidos.
                 if states.InfiniteStamina
                     and (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
                     if staminaOriginals[obj]==nil then staminaOriginals[obj]=obj.Value end
@@ -1837,7 +1874,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV25"
+gui.Name = "RoubeOuMorraV26"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1865,7 +1902,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V25  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V26  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -1875,7 +1912,7 @@ title.Parent = header
 local minimize = Instance.new("TextButton")
 minimize.Size = UDim2.fromOffset(38,34)
 minimize.Position = UDim2.new(1,-44,0,7)
-minimize.Text = "—"
+minimize.Text = "â€”"
 minimize.TextSize = 22
 minimize.Font = Enum.Font.GothamBold
 minimize.TextColor3 = Color3.new(1,1,1)
@@ -2032,7 +2069,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V25] "..name..": "..tostring(err))
+                warn("[V26] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -2062,16 +2099,16 @@ local pESP = makePage("ESP")
 local pEnv = makePage("Ambiente")
 local pCollect = makePage("Coleta")
 local pData = makePage("Dados")
-local pConfig = makePage("Configurações")
+local pConfig = makePage("ConfiguraÃ§Ãµes")
 
 for _,name in ipairs({
-    "Principal","ESP","Ambiente","Coleta","Dados","Configurações"
+    "Principal","ESP","Ambiente","Coleta","Dados","ConfiguraÃ§Ãµes"
 }) do
     addNav(name)
 end
 
 -- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V25 | Feito por Tales")
+addSection(pMain,"ROUBE OU MORRA V26 | Feito por Tales")
 addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
 addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
 
@@ -2098,17 +2135,17 @@ addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 
 -- COLETA
 addSection(pCollect,"COLETA")
-addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
+addToggle(pCollect,"Coleta InstantÃ¢nea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
 addToggle(pCollect,"Stamina Infinita (experimental - apenas valores locais identificados)","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
-addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V25: estamina, entidades, ferramentas, projéteis e clarões",function()
-    statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
+addSection(pData,"COLETOR AUTOMÃTICO DA PARTIDA")
+addButton(pData,"V26: estamina, entidades, ferramentas, projÃ©teis e clarÃµes",function()
+    statusLabel.Text = "Cliente: coleta somente dados replicados/visÃ­veis; valores do servidor nÃ£o sÃ£o acessÃ­veis."
 end)
 
-addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
+addToggle(pData,"Coletor automÃ¡tico durante a partida","DataCollector",function(enabled)
     if enabled then
         statusLabel.Text = "Iniciando coleta direcionada..."
         watchFlashRoot(Lighting)
@@ -2127,7 +2164,7 @@ addToggle(pData,"Coletor automático durante a partida","DataCollector",function
             .." | Pendentes: "..#sendQueue
         flushReports()
     else
-        statusLabel.Text = "Coleta automática pausada"
+        statusLabel.Text = "Coleta automÃ¡tica pausada"
     end
 end)
 
@@ -2178,7 +2215,7 @@ reportBox = Instance.new("TextBox")
 reportBox.Size = UDim2.new(1,-6,0,210)
 reportBox.BackgroundColor3 = Color3.fromRGB(10,10,13)
 reportBox.TextColor3 = Color3.new(1,1,1)
-reportBox.PlaceholderText = "O relatório completo aparecerá aqui..."
+reportBox.PlaceholderText = "O relatÃ³rio completo aparecerÃ¡ aqui..."
 reportBox.Text = ""
 reportBox.TextSize = 10
 reportBox.TextWrapped = false
@@ -2190,7 +2227,7 @@ reportBox.TextEditable = true
 reportBox.Parent = pData
 Instance.new("UICorner",reportBox).CornerRadius = UDim.new(0,6)
 
-addButton(pData,"GERAR E COPIAR RELATÓRIO INTEIRO",copyFullReport)
+addButton(pData,"GERAR E COPIAR RELATÃ“RIO INTEIRO",copyFullReport)
 
 addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     statusLabel.Text = "Atualizando dados..."
@@ -2198,12 +2235,12 @@ addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     flushReports()
 
     statusLabel.Text =
-        "Varredura concluída | Novos: "..a
+        "Varredura concluÃ­da | Novos: "..a
         .." | Registros: "..#records
         .." | Pendentes: "..#sendQueue
 end)
 
-addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
+addButton(pData,"LIMPAR RELATÃ“RIO LOCAL",function()
     table.clear(records)
     table.clear(recordIndex)
     table.clear(sentKeys)
@@ -2216,17 +2253,17 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
     lastDataScan = 0
 
     reportBox.Text = ""
-    statusLabel.Text = "Relatório local limpo"
+    statusLabel.Text = "RelatÃ³rio local limpo"
 end)
 
--- CONFIGURAÇÕES
-addSection(pConfig,"DIAGNÓSTICO E CONFIGURAÇÕES")
+-- CONFIGURAÃ‡Ã•ES
+addSection(pConfig,"DIAGNÃ“STICO E CONFIGURAÃ‡Ã•ES")
 
 addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V25",
+        "DIAGNÃ“STICO DE STAMINA V26",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -2246,7 +2283,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     end
 
     reportBox.Text = table.concat(lines,"\n")
-    statusLabel.Text = "Diagnóstico de stamina concluído"
+    statusLabel.Text = "DiagnÃ³stico de stamina concluÃ­do"
     showPage("Dados")
 end)
 
@@ -2315,7 +2352,7 @@ restore.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- ATUALIZAÇÃO OTIMIZADA
+-- ATUALIZAÃ‡ÃƒO OTIMIZADA
 --==============================================================
 
 task.spawn(function()
@@ -2325,8 +2362,8 @@ task.spawn(function()
     while gui and gui.Parent do
         local now = os.clock()
 
-        -- ESP é atualizado por ativação, troca de personagem e novos objetos.
-        -- Não existe mais varredura periódica do mapa inteiro.
+        -- ESP Ã© atualizado por ativaÃ§Ã£o, troca de personagem e novos objetos.
+        -- NÃ£o existe mais varredura periÃ³dica do mapa inteiro.
 
         if states.RemoveDoors and now-lastDoor>=1.0 then
             refreshDoorCollision()
@@ -2338,7 +2375,7 @@ task.spawn(function()
             lastStamina = now
         end
 
-        -- Anti-Flash é orientado a eventos: evita varrer toda a interface a cada 0,5s.
+        -- Anti-Flash Ã© orientado a eventos: evita varrer toda a interface a cada 0,5s.
 
         if states.DataCollector and now-lastDataScan>=30 then
             local a = scanGame()
