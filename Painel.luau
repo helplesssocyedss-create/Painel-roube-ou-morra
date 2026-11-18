@@ -1,6 +1,6 @@
 --==============================================================
--- ROUBE OU MORRA V19 | Feito por Tales
--- Portas | ESP Dutos | Stamina | Coleta online e manual
+-- ROUBE OU MORRA V20 | Feito por Tales
+-- Otimização mobile | Anti-Flash | Relatório | Coleta online
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -16,6 +16,8 @@ local PlayerGui = player:WaitForChild("PlayerGui")
 
 local old = PlayerGui:FindFirstChild("RoubeOuMorraV19")
 if old then old:Destroy() end
+local old20 = PlayerGui:FindFirstChild("RoubeOuMorraV20")
+if old20 then old20:Destroy() end
 
 local gui
 
@@ -57,18 +59,20 @@ local records, recordIndex = {}, {}
 local sentKeys, queuedKeys, sendQueue = {}, {}, {}
 
 local MAX_RECORDS = 12000
+local SUPABASE_URL = "https://nqafhfadocgqkzboyxpp.supabase.co"
+local COLLECTOR_TOKEN = ""
+
 local statusLabel
 local reportBox
 local tokenBox
 local sendBusy = false
-local senderRunning = false
-local lastHTTP = "Aguardando envio"
+local lastHTTP = "Aguardando token"
 local scanCount = 0
 local startTime = os.clock()
 local lastScan = "Nenhuma"
-local COLLECTOR_TOKEN = ""
-
-local SUPABASE_URL = "https://nqafhfadocgqkzboyxpp.supabase.co"
+local lastDataScan = 0
+local espBusy = false
+local farmGeneration = 0
 
 local sendRequest =
     (type(request)=="function" and request)
@@ -94,16 +98,13 @@ end
 
 local function getPlayerFromModel(model)
     for _,plr in ipairs(Players:GetPlayers()) do
-        if plr.Character == model then
-            return plr
-        end
+        if plr.Character == model then return plr end
     end
 end
 
 local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
     if getPlayerFromModel(model) then return false end
-
     if contains(model.Name,monsterNames) then return true end
 
     local ok,tags = pcall(function()
@@ -126,9 +127,7 @@ local function isMonster(model)
         if value == true then return true end
         if type(value)=="string" and contains(value,{
             "monster","monstro","enemy","inimigo","creature"
-        }) then
-            return true
-        end
+        }) then return true end
     end
 
     return false
@@ -139,9 +138,7 @@ local function getRarity(obj)
         local value = obj:GetAttribute(key)
         if type(value)=="string" then
             for rarity in pairs(rarityEnabled) do
-                if value:lower()==rarity:lower() then
-                    return rarity
-                end
+                if value:lower()==rarity:lower() then return rarity end
             end
         end
     end
@@ -218,12 +215,9 @@ local function createESP(obj,color,textValue,small)
     labels[obj].TextLabel.TextColor3 = color
 end
 
--- Procura dutos pelo nome, tags, atributos e prompts.
--- Não depende apenas do nome do Model.
 local function isDuctObject(obj)
-    if not obj then return false end
-
     local current = obj
+
     for _=1,10 do
         if not current then break end
 
@@ -248,9 +242,7 @@ local function isDuctObject(obj)
 
     if ok and tags then
         for _,tag in ipairs(tags) do
-            if contains(tag,{"duct","duto","vent"}) then
-                return true
-            end
+            if contains(tag,{"duct","duto","vent"}) then return true end
         end
     end
 
@@ -259,12 +251,11 @@ end
 
 local function hasDuctPrompt(obj)
     for _,item in ipairs(obj:GetDescendants()) do
-        if item:IsA("ProximityPrompt") then
-            if contains(item.ActionText.." "..item.ObjectText,{
+        if item:IsA("ProximityPrompt")
+            and contains(item.ActionText.." "..item.ObjectText,{
                 "duct","duto","vent","entrar","crawl"
             }) then
-                return true
-            end
+            return true
         end
     end
     return false
@@ -280,85 +271,91 @@ local function isUsableDuct(obj)
     for _,item in ipairs(obj:GetDescendants()) do
         if item:IsA("ProximityPrompt") and item.Enabled then
             foundPrompt = true
-
             local part = item.Parent
+
             if part and part:IsA("Attachment") then
                 part = part.Parent
             end
 
             if part and part:IsA("BasePart") then
                 local distance = (root.Position-part.Position).Magnitude
-                local allowed = math.max(item.MaxActivationDistance*4,60)
-
-                if distance <= allowed then
+                if distance <= math.max(item.MaxActivationDistance*4,60) then
                     return true
                 end
             end
         end
     end
 
-    -- Dutos sem prompt também podem receber ESP.
     return not foundPrompt
 end
 
 local function refreshESP()
-    local keep = {}
+    if espBusy then return end
+    espBusy = true
 
-    for _,obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") then
-            if isMonster(obj) then
-                if states.ESPMonsters then
+    task.spawn(function()
+        local keep = {}
+        local descendants = Workspace:GetDescendants()
+
+        for index,obj in ipairs(descendants) do
+            if not gui or not gui.Parent then break end
+
+            if obj:IsA("Model") then
+                if states.ESPMonsters and isMonster(obj) then
                     createESP(obj,Color3.fromRGB(255,35,35),obj.Name,false)
                     keep[obj] = true
+                else
+                    local plr = getPlayerFromModel(obj)
+                    if plr and plr~=player and states.ESPPlayers then
+                        createESP(obj,Color3.fromRGB(40,140,255),plr.Name,false)
+                        keep[obj] = true
+                    end
                 end
-            else
-                local plr = getPlayerFromModel(obj)
-                if plr and plr~=player and states.ESPPlayers then
-                    createESP(obj,Color3.fromRGB(40,140,255),plr.Name,false)
+            end
+
+            if states.ESPDucts and (obj:IsA("Model") or obj:IsA("BasePart")) then
+                if isDuctObject(obj) or hasDuctPrompt(obj) then
+                    if isUsableDuct(obj) then
+                        createESP(obj,Color3.fromRGB(255,170,40),nil,true)
+                        keep[obj] = true
+                    end
+                end
+            end
+
+            if obj:IsA("Model") or obj:IsA("BasePart") then
+                local rarity = getRarity(obj)
+                local parentMonster = obj.Parent
+                    and obj.Parent:IsA("Model")
+                    and isMonster(obj.Parent)
+
+                if rarity and rarityEnabled[rarity]
+                    and not (obj:IsA("Model") and isMonster(obj))
+                    and not parentMonster then
+
+                    local weight = obj:GetAttribute("Weight")
+                        or obj:GetAttribute("Peso") or "?"
+                    local price = obj:GetAttribute("Value")
+                        or obj:GetAttribute("Price")
+                        or obj:GetAttribute("Valor") or "?"
+
+                    createESP(
+                        obj,rarityColors[rarity],
+                        obj.Name.." | "..tostring(weight).." | $"..tostring(price),
+                        true
+                    )
                     keep[obj] = true
                 end
             end
+
+            if index%250==0 then task.wait() end
         end
 
-        if states.ESPDucts and (obj:IsA("Model") or obj:IsA("BasePart")) then
-            if isDuctObject(obj) or hasDuctPrompt(obj) then
-                if isUsableDuct(obj) then
-                    createESP(obj,Color3.fromRGB(255,170,40),nil,true)
-                    keep[obj] = true
-                end
-            end
+        for obj in pairs(highlights) do
+            if not keep[obj] then removeESP(obj) end
         end
 
-        if obj:IsA("Model") or obj:IsA("BasePart") then
-            local rarity = getRarity(obj)
-            local parentMonster = obj.Parent
-                and obj.Parent:IsA("Model")
-                and isMonster(obj.Parent)
-
-            if rarity and rarityEnabled[rarity]
-                and not (obj:IsA("Model") and isMonster(obj))
-                and not parentMonster then
-
-                local weight = obj:GetAttribute("Weight")
-                    or obj:GetAttribute("Peso") or "?"
-                local price = obj:GetAttribute("Value")
-                    or obj:GetAttribute("Price")
-                    or obj:GetAttribute("Valor") or "?"
-
-                createESP(
-                    obj,
-                    rarityColors[rarity],
-                    obj.Name.." | "..tostring(weight).." | $"..tostring(price),
-                    true
-                )
-                keep[obj] = true
-            end
-        end
-    end
-
-    for obj in pairs(highlights) do
-        if not keep[obj] then removeESP(obj) end
-    end
+        espBusy = false
+    end)
 end
 
 --==============================================================
@@ -370,11 +367,11 @@ local function hidePart(part)
 
     if not hiddenParts[part] then
         hiddenParts[part] = {
-            Transparency = part.Transparency,
-            LocalTransparencyModifier = part.LocalTransparencyModifier,
-            CanCollide = part.CanCollide,
-            CanTouch = part.CanTouch,
-            CanQuery = part.CanQuery
+            Transparency=part.Transparency,
+            LocalTransparencyModifier=part.LocalTransparencyModifier,
+            CanCollide=part.CanCollide,
+            CanTouch=part.CanTouch,
+            CanQuery=part.CanQuery
         }
     end
 
@@ -409,16 +406,12 @@ local function isDoorPart(obj)
 
         if contains(current.Name,{
             "fridge","refrigerator","geladeira","freezer","cooler"
-        }) then
-            return false
-        end
+        }) then return false end
 
         if contains(current.Name,{
             "door","porta","doorleaf","door_leaf",
             "hingeddoor","doorframe","doorpart"
-        }) then
-            return true
-        end
+        }) then return true end
 
         current = current.Parent
     end
@@ -428,8 +421,7 @@ end
 
 local function isDuctCapPart(obj)
     local current = obj
-    local inDuct = false
-    local cap = false
+    local inDuct,cap = false,false
 
     for _=1,10 do
         if not current then break end
@@ -441,14 +433,17 @@ local function isDuctCapPart(obj)
         if contains(current.Name,{
             "hatch","cover","lid","tampa","escotilha",
             "ductdoor","ventdoor","door"
-        }) then
-            cap = true
-        end
+        }) then cap = true end
 
         current = current.Parent
     end
 
     return inDuct and cap
+end
+
+local function isTargetDoor(obj)
+    return obj:IsA("BasePart")
+        and (isDoorPart(obj) or isDuctCapPart(obj))
 end
 
 local function setDoors(enabled)
@@ -460,22 +455,22 @@ local function setDoors(enabled)
     end
 
     for _,obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart")
-            and (isDoorPart(obj) or isDuctCapPart(obj)) then
-            hidePart(obj)
-        end
+        if isTargetDoor(obj) then hidePart(obj) end
     end
 end
 
--- Reaplica a colisão local frequentemente.
--- Isso combate alterações de estado feitas pelo jogo ao abrir/fechar.
 local function refreshDoorCollision()
     if not states.RemoveDoors then return end
 
-    for _,obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart")
-            and (isDoorPart(obj) or isDuctCapPart(obj)) then
-            hidePart(obj)
+    -- Só reaplica nas peças já identificadas; não varre o mapa inteiro.
+    for part in pairs(hiddenParts) do
+        if part and part.Parent then
+            pcall(function()
+                part.LocalTransparencyModifier = 1
+                part.CanCollide = false
+                part.CanTouch = false
+                part.CanQuery = false
+            end)
         end
     end
 end
@@ -484,8 +479,7 @@ Workspace.DescendantAdded:Connect(function(obj)
     task.defer(function()
         if not obj or not obj.Parent then return end
 
-        if states.RemoveDoors and obj:IsA("BasePart")
-            and (isDoorPart(obj) or isDuctCapPart(obj)) then
+        if states.RemoveDoors and isTargetDoor(obj) then
             hidePart(obj)
         end
 
@@ -493,9 +487,7 @@ Workspace.DescendantAdded:Connect(function(obj)
             if savedPrompts[obj]==nil then
                 savedPrompts[obj] = obj.HoldDuration
             end
-            pcall(function()
-                obj.HoldDuration = 0
-            end)
+            pcall(function() obj.HoldDuration = 0 end)
         end
     end)
 end)
@@ -513,17 +505,13 @@ local function setInstant(enabled)
                 if savedPrompts[obj]==nil then
                     savedPrompts[obj] = obj.HoldDuration
                 end
-                pcall(function()
-                    obj.HoldDuration = 0
-                end)
+                pcall(function() obj.HoldDuration = 0 end)
             end
         end
     else
         for obj,duration in pairs(savedPrompts) do
             if obj and obj.Parent then
-                pcall(function()
-                    obj.HoldDuration = duration
-                end)
+                pcall(function() obj.HoldDuration = duration end)
             end
         end
         table.clear(savedPrompts)
@@ -538,33 +526,10 @@ local function queueReport(entry,key)
     if sentKeys[key] or queuedKeys[key] then return end
 
     table.insert(sendQueue,{
-        record_key = key,
-        payload = entry
+        record_key=key,
+        payload=entry
     })
-
     queuedKeys[key] = true
-end
-
-local function getHTTPError(res,code)
-    local body = tostring(res and res.Body or "")
-
-    if code==401 or code==403 then
-        return "Token recusado (HTTP "..code..")"
-    elseif code==404 then
-        return "Função ingest-report não encontrada (HTTP 404)"
-    elseif code==429 then
-        return "Limite de requisições atingido (HTTP 429)"
-    elseif code>=500 then
-        return "Erro no servidor Supabase (HTTP "..code..")"
-    elseif code==0 then
-        return "Falha de rede ou request()"
-    end
-
-    if body~="" then
-        return "HTTP "..code..": "..string.sub(body,1,180)
-    end
-
-    return "Falha HTTP "..code
 end
 
 local function sendOne(item)
@@ -573,24 +538,24 @@ local function sendOne(item)
     end
 
     if COLLECTOR_TOKEN=="" then
-        return false,"Informe o token do coletor no campo da página Dados"
+        return false,"Informe o token do coletor"
     end
 
     local body = {
-        session_id = sessionId,
-        record_key = item.record_key,
-        payload = item.payload
+        session_id=sessionId,
+        record_key=item.record_key,
+        payload=item.payload
     }
 
     local ok,res = pcall(function()
         return sendRequest({
-            Url = SUPABASE_URL.."/functions/v1/ingest-report",
-            Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json",
-                ["x-collector-token"] = COLLECTOR_TOKEN
+            Url=SUPABASE_URL.."/functions/v1/ingest-report",
+            Method="POST",
+            Headers={
+                ["Content-Type"]="application/json",
+                ["x-collector-token"]=COLLECTOR_TOKEN
             },
-            Body = HttpService:JSONEncode(body)
+            Body=HttpService:JSONEncode(body)
         })
     end)
 
@@ -604,11 +569,19 @@ local function sendOne(item)
         return true,"HTTP "..code
     end
 
-    if code==409 then
-        return true,"Registro já existente"
+    if code==409 then return true,"Registro já existente" end
+
+    if code==401 or code==403 then
+        return false,"Token recusado (HTTP "..code..")"
+    elseif code==404 then
+        return false,"Função ingest-report não encontrada (404)"
+    elseif code==429 then
+        return false,"Limite de requisições (429)"
+    elseif code>=500 then
+        return false,"Erro Supabase (HTTP "..code..")"
     end
 
-    return false,getHTTPError(res,code)
+    return false,"Falha HTTP "..code..": "..tostring(res.Body or "")
 end
 
 local function flushReports()
@@ -616,13 +589,13 @@ local function flushReports()
 
     if not sendRequest then
         lastHTTP = "Executor sem suporte a request()"
-        if statusLabel then statusLabel.Text = lastHTTP end
+        if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
 
     if COLLECTOR_TOKEN=="" then
         lastHTTP = "Token não informado"
-        if statusLabel then statusLabel.Text = lastHTTP end
+        if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
 
@@ -632,7 +605,6 @@ local function flushReports()
         local sent = 0
         local failed = false
 
-        -- Envio contínuo, sem esperar pela próxima varredura.
         while #sendQueue>0 and states.DataCollector do
             local item = table.remove(sendQueue,1)
             if not item then break end
@@ -658,29 +630,28 @@ local function flushReports()
                     .." | "..lastHTTP
             end
 
-            task.wait(0.15)
+            -- Intervalo para evitar sobrecarregar o endpoint.
+            task.wait(0.08)
         end
 
         sendBusy = false
 
         if statusLabel then
             statusLabel.Text =
-                "Envio online | Nesta rodada: "..sent
+                "Envio online | Rodada: "..sent
                 .." | Pendentes: "..#sendQueue
                 .." | "..lastHTTP
         end
 
-        if failed then
-            task.wait(3)
-            if states.DataCollector and #sendQueue>0 then
-                flushReports()
-            end
+        if failed and states.DataCollector then
+            task.wait(5)
+            if states.DataCollector then flushReports() end
         end
     end)
 end
 
 --==============================================================
--- VARREDURA
+-- VARREDURA DE DADOS
 --==============================================================
 
 local function scanGame()
@@ -688,8 +659,11 @@ local function scanGame()
     lastScan = os.date("%d/%m/%Y %H:%M:%S")
 
     local added,updated = 0,0
+    local descendants = Workspace:GetDescendants()
 
-    for _,obj in ipairs(Workspace:GetDescendants()) do
+    for index,obj in ipairs(descendants) do
+        if not gui or not gui.Parent then break end
+
         if obj:IsA("Model") or obj:IsA("BasePart")
             or obj:IsA("ProximityPrompt") then
 
@@ -698,13 +672,12 @@ local function scanGame()
             end)
 
             path = ok and path or obj.Name
-
             local key = obj.ClassName.."|"..path
 
             local entry = {
-                Name = obj.Name,
-                Class = obj.ClassName,
-                Path = path
+                Name=obj.Name,
+                Class=obj.ClassName,
+                Path=path
             }
 
             local attrs = obj:GetAttributes()
@@ -738,24 +711,29 @@ local function scanGame()
 
             queueReport(entry,key)
         end
+
+        -- Pequenas pausas para aliviar o celular durante a varredura.
+        if index%150==0 then task.wait() end
     end
 
+    lastDataScan = os.clock()
     return added,updated
 end
 
 --==============================================================
--- RELATÓRIO MANUAL INTEGRAL
+-- RELATÓRIO INTEGRAL
 --==============================================================
 
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V19 - RELATORIO",
+        "ROUBE OU MORRA V20 - RELATORIO",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
         "Varreduras: "..scanCount,
         "Registros acumulados: "..#records,
+        "Pendentes online: "..#sendQueue,
         "Ultima varredura: "..lastScan,
         "========================================"
     }
@@ -763,11 +741,21 @@ local function exportData()
     for i,e in ipairs(records) do
         table.insert(out,"\nREGISTRO "..i)
 
-        for k,v in pairs(e) do
+        local keys = {}
+        for k in pairs(e) do table.insert(keys,k) end
+        table.sort(keys)
+
+        for _,k in ipairs(keys) do
+            local v = e[k]
+
             if type(v)=="table" then
                 table.insert(out,tostring(k)..":")
-                for sk,sv in pairs(v) do
-                    table.insert(out,"  "..tostring(sk).." = "..tostring(sv))
+                local subkeys = {}
+                for sk in pairs(v) do table.insert(subkeys,sk) end
+                table.sort(subkeys)
+
+                for _,sk in ipairs(subkeys) do
+                    table.insert(out,"  "..tostring(sk).." = "..tostring(v[sk]))
                 end
             else
                 table.insert(out,tostring(k)..": "..tostring(v))
@@ -783,39 +771,46 @@ local function exportData()
 end
 
 local function copyFullReport()
-    local full = exportData()
-
-    if reportBox then
-        reportBox.Text = full
+    if statusLabel then
+        statusLabel.Text = "Gerando relatório completo..."
     end
 
-    local clipboard =
-        (type(setclipboard)=="function" and setclipboard)
-        or (type(toclipboard)=="function" and toclipboard)
+    task.spawn(function()
+        local full = exportData()
 
-    if clipboard then
-        local ok,err = pcall(clipboard,full)
+        if reportBox then
+            reportBox.Text = full
+            reportBox.CursorPosition = 1
+        end
 
-        if ok then
-            if statusLabel then
-                statusLabel.Text =
-                    "Relatório integral copiado: "
-                    ..#full.." caracteres | "
-                    ..#records.." registros"
+        local clipboard =
+            (type(setclipboard)=="function" and setclipboard)
+            or (type(toclipboard)=="function" and toclipboard)
+
+        if clipboard then
+            local ok,err = pcall(clipboard,full)
+
+            if ok then
+                if statusLabel then
+                    statusLabel.Text =
+                        "Relatório copiado! "
+                        ..#full.." caracteres | "
+                        ..#records.." registros"
+                end
+            else
+                if statusLabel then
+                    statusLabel.Text =
+                        "Falha ao copiar: "..tostring(err)
+                        .." | Relatório está na caixa abaixo"
+                end
             end
         else
             if statusLabel then
                 statusLabel.Text =
-                    "Clipboard falhou: "..tostring(err)
-                    .." | Use o campo e selecione todo o texto"
+                    "Relatório gerado abaixo. Toque no texto e selecione tudo para copiar."
             end
         end
-    else
-        if statusLabel then
-            statusLabel.Text =
-                "Relatório integral no campo. Toque nele, selecione tudo e copie."
-        end
-    end
+    end)
 end
 
 --==============================================================
@@ -828,11 +823,11 @@ local function setBrightness(enabled)
     if enabled then
         if not next(savedLighting) then
             savedLighting = {
-                Brightness = Lighting.Brightness,
-                ClockTime = Lighting.ClockTime,
-                GlobalShadows = Lighting.GlobalShadows,
-                Ambient = Lighting.Ambient,
-                OutdoorAmbient = Lighting.OutdoorAmbient
+                Brightness=Lighting.Brightness,
+                ClockTime=Lighting.ClockTime,
+                GlobalShadows=Lighting.GlobalShadows,
+                Ambient=Lighting.Ambient,
+                OutdoorAmbient=Lighting.OutdoorAmbient
             }
         end
 
@@ -843,9 +838,7 @@ local function setBrightness(enabled)
         Lighting.OutdoorAmbient = Color3.fromRGB(200,200,200)
     else
         for k,v in pairs(savedLighting) do
-            pcall(function()
-                Lighting[k] = v
-            end)
+            pcall(function() Lighting[k]=v end)
         end
         table.clear(savedLighting)
     end
@@ -890,9 +883,7 @@ local function inspectFlashObject(obj)
             savedEffects[obj] = obj.Enabled
         end
 
-        pcall(function()
-            obj.Enabled = false
-        end)
+        pcall(function() obj.Enabled=false end)
     end
 
     if obj:IsA("Frame") or obj:IsA("ImageLabel") then
@@ -917,9 +908,7 @@ local function inspectFlashObject(obj)
                 if savedOverlays[obj]==nil then
                     savedOverlays[obj] = obj.Visible
                 end
-                pcall(function()
-                    obj.Visible = false
-                end)
+                pcall(function() obj.Visible=false end)
             end
         end
     end
@@ -927,9 +916,15 @@ end
 
 local function inspectFlashRoot(root)
     if not root then return end
+
     for _,obj in ipairs(root:GetDescendants()) do
         inspectFlashObject(obj)
     end
+end
+
+local function inspectCharacterFlash()
+    local char = player.Character
+    if char then inspectFlashRoot(char) end
 end
 
 local function setAntiFlash(enabled)
@@ -939,38 +934,50 @@ local function setAntiFlash(enabled)
         inspectFlashRoot(Lighting)
         inspectFlashRoot(PlayerGui)
         inspectFlashRoot(Workspace.CurrentCamera)
+        inspectCharacterFlash()
     else
         for obj,value in pairs(savedEffects) do
             if obj and obj.Parent then
-                pcall(function()
-                    obj.Enabled = value
-                end)
+                pcall(function() obj.Enabled=value end)
             end
         end
         table.clear(savedEffects)
 
         for obj,value in pairs(savedOverlays) do
             if obj and obj.Parent then
-                pcall(function()
-                    obj.Visible = value
-                end)
+                pcall(function() obj.Visible=value end)
             end
         end
         table.clear(savedOverlays)
     end
 end
 
-Lighting.DescendantAdded:Connect(function(obj)
-    task.defer(function() inspectFlashObject(obj) end)
-end)
+local function watchFlashRoot(root)
+    if not root then return end
 
-PlayerGui.DescendantAdded:Connect(function(obj)
-    task.defer(function() inspectFlashObject(obj) end)
-end)
+    root.DescendantAdded:Connect(function(obj)
+        task.defer(function()
+            inspectFlashObject(obj)
+        end)
+    end)
+end
+
+watchFlashRoot(Lighting)
+watchFlashRoot(PlayerGui)
 
 Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     if states.AntiFlash then
-        inspectFlashRoot(Workspace.CurrentCamera)
+        local camera = Workspace.CurrentCamera
+        inspectFlashRoot(camera)
+        watchFlashRoot(camera)
+    end
+end)
+
+player.CharacterAdded:Connect(function(char)
+    if states.AntiFlash then
+        task.wait(1)
+        inspectFlashRoot(char)
+        watchFlashRoot(char)
     end
 end)
 
@@ -979,7 +986,6 @@ end)
 --==============================================================
 
 local staminaOriginals = {}
-local staminaModuleTable
 local staminaPatched = {}
 
 local function isStaminaName(name)
@@ -989,61 +995,39 @@ local function isStaminaName(name)
     })
 end
 
-local function patchStaminaTable(tbl,depth)
-    if type(tbl)~="table" or depth>7 then return end
+local function patchStaminaTable(tbl,depth,visited)
+    if type(tbl)~="table" or depth>6 or visited[tbl] then return end
+    visited[tbl] = true
 
     for key,value in pairs(tbl) do
         if type(value)=="number" and isStaminaName(tostring(key)) then
-            pcall(function()
-                tbl[key] = 999999
-            end)
+            pcall(function() tbl[key]=999999 end)
         elseif type(value)=="table" then
-            patchStaminaTable(value,depth+1)
+            patchStaminaTable(value,depth+1,visited)
         end
     end
 end
 
-local function patchFunctionUpvalues(fn)
-    if type(fn)~="function" then return end
+local function patchFunctionUpvalues(fn,depth)
+    if type(fn)~="function" or depth>4 or staminaPatched[fn] then return end
+    staminaPatched[fn] = true
 
     local dbg = debug
-    if not dbg or type(dbg.getupvalue)~="function" then
-        return
-    end
+    if not dbg or type(dbg.getupvalue)~="function" then return end
 
-    for index=1,100 do
+    for index=1,60 do
         local ok,name,value = pcall(dbg.getupvalue,fn,index)
-
-        if not ok or name==nil then
-            break
-        end
+        if not ok or name==nil then break end
 
         if type(value)=="number" and isStaminaName(tostring(name)) then
             if type(dbg.setupvalue)=="function" then
                 pcall(dbg.setupvalue,fn,index,999999)
             end
         elseif type(value)=="table" then
-            patchStaminaTable(value,0)
+            patchStaminaTable(value,0,{})
         elseif type(value)=="function" then
-            if not staminaPatched[value] then
-                staminaPatched[value] = true
-                patchFunctionUpvalues(value)
-            end
+            patchFunctionUpvalues(value,depth+1)
         end
-    end
-end
-
-local function rememberAndSetValue(obj)
-    if not obj then return end
-
-    if obj:IsA("NumberValue") or obj:IsA("IntValue") then
-        if staminaOriginals[obj]==nil then
-            staminaOriginals[obj] = obj.Value
-        end
-
-        pcall(function()
-            obj.Value = 999999
-        end)
     end
 end
 
@@ -1053,7 +1037,13 @@ local function findStaminaObjects()
     for _,obj in ipairs(player:GetDescendants()) do
         if isStaminaName(obj.Name) then
             table.insert(found,obj)
-            rememberAndSetValue(obj)
+
+            if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                if staminaOriginals[obj]==nil then
+                    staminaOriginals[obj]=obj.Value
+                end
+                pcall(function() obj.Value=999999 end)
+            end
         end
     end
 
@@ -1065,28 +1055,21 @@ local function findStaminaObjects()
 
         if ok then
             if type(result)=="table" then
-                staminaModuleTable = result
-                patchStaminaTable(result,0)
-
+                patchStaminaTable(result,0,{})
                 for _,value in pairs(result) do
                     if type(value)=="function" then
-                        patchFunctionUpvalues(value)
+                        patchFunctionUpvalues(value,0)
                     end
                 end
             elseif type(result)=="function" then
-                patchFunctionUpvalues(result)
+                patchFunctionUpvalues(result,0)
             end
-
             table.insert(found,module)
         end
     end
 
-    local hud = player:FindFirstChild("PlayerGui")
-        and player.PlayerGui:FindFirstChild("StaminaHUD")
-
-    if hud then
-        table.insert(found,hud)
-    end
+    local hud = PlayerGui:FindFirstChild("StaminaHUD")
+    if hud then table.insert(found,hud) end
 
     return found
 end
@@ -1099,23 +1082,17 @@ local function setInfiniteStamina(enabled)
     else
         for obj,value in pairs(staminaOriginals) do
             if obj and obj.Parent then
-                pcall(function()
-                    obj.Value = value
-                end)
+                pcall(function() obj.Value=value end)
             end
         end
-
         table.clear(staminaOriginals)
         table.clear(staminaPatched)
-        staminaModuleTable = nil
     end
 end
 
 --==============================================================
 -- AUTO FARM
 --==============================================================
-
-local farmGeneration = 0
 
 local function setAutoFarm(enabled)
     states.AutoFarm = enabled
@@ -1130,7 +1107,9 @@ local function setAutoFarm(enabled)
             local root = char and char:FindFirstChild("HumanoidRootPart")
 
             if root then
-                for _,obj in ipairs(Workspace:GetDescendants()) do
+                local prompts = Workspace:GetDescendants()
+
+                for index,obj in ipairs(prompts) do
                     if generation~=farmGeneration then break end
 
                     if obj:IsA("ProximityPrompt") and obj.Enabled then
@@ -1153,10 +1132,12 @@ local function setAutoFarm(enabled)
                             task.wait(0.25)
                         end
                     end
+
+                    if index%200==0 then task.wait() end
                 end
             end
 
-            task.wait(0.45)
+            task.wait(1.5)
         end
     end)
 end
@@ -1166,7 +1147,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV19"
+gui.Name = "RoubeOuMorraV20"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1194,7 +1175,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V19  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V20  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -1245,7 +1226,7 @@ content.BorderSizePixel = 0
 content.Parent = main
 Instance.new("UICorner",content).CornerRadius = UDim.new(0,8)
 
-local pages, pageButtons = {}, {}
+local pages,pageButtons = {},{}
 
 local function makePage(name)
     local page = Instance.new("ScrollingFrame")
@@ -1269,9 +1250,7 @@ local function makePage(name)
 end
 
 local function showPage(name)
-    for n,p in pairs(pages) do
-        p.Visible = n==name
-    end
+    for n,p in pairs(pages) do p.Visible=n==name end
 
     for n,b in pairs(pageButtons) do
         b.BackgroundColor3 = n==name
@@ -1363,7 +1342,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V19] "..name..": "..tostring(err))
+                warn("[V20] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -1384,11 +1363,7 @@ local function addNav(name)
     b.TextSize = 12
     b.Parent = sidebar
     Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
-
-    b.MouseButton1Click:Connect(function()
-        showPage(name)
-    end)
-
+    b.MouseButton1Click:Connect(function() showPage(name) end)
     pageButtons[name] = b
 end
 
@@ -1406,7 +1381,7 @@ for _,name in ipairs({
 end
 
 -- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V19")
+addSection(pMain,"ROUBE OU MORRA V20")
 addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
 addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
 
@@ -1417,7 +1392,6 @@ addToggle(pESP,"ESP Monstros","ESPMonsters",refreshESP)
 addToggle(pESP,"ESP Dutos (contorno sem nome)","ESPDucts",refreshESP)
 
 addSection(pESP,"ESP DE ITENS POR RARIDADE")
-
 for _,rarity in ipairs({
     "Common","Uncommon","Rare","Epic","Legendary","Mythic","Secret"
 }) do
@@ -1441,22 +1415,20 @@ addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
 
 addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
     if enabled then
+        statusLabel.Text = "Iniciando varredura..."
         local a = scanGame()
-        if statusLabel then
-            statusLabel.Text = "Coleta ativa | Novos: "..a
-                .." | Total: "..#records
-                .." | Pendentes: "..#sendQueue
-        end
+        statusLabel.Text =
+            "Coleta ativa | Novos: "..a
+            .." | Total: "..#records
+            .." | Pendentes: "..#sendQueue
         flushReports()
     else
-        if statusLabel then
-            statusLabel.Text = "Coleta automática pausada"
-        end
+        statusLabel.Text = "Coleta automática pausada"
     end
 end)
 
 statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1,-6,0,45)
+statusLabel.Size = UDim2.new(1,-6,0,48)
 statusLabel.BackgroundTransparency = 1
 statusLabel.TextColor3 = Color3.fromRGB(255,205,120)
 statusLabel.Text = "Coletor parado"
@@ -1479,30 +1451,30 @@ tokenBox = Instance.new("TextBox")
 tokenBox.Size = UDim2.new(1,-6,0,34)
 tokenBox.BackgroundColor3 = Color3.fromRGB(10,10,13)
 tokenBox.TextColor3 = Color3.new(1,1,1)
-tokenBox.PlaceholderText = "Cole aqui o token atual do coletor"
+tokenBox.PlaceholderText = "Cole aqui o valor salvo em COLLECTOR_TOKEN"
 tokenBox.Text = ""
 tokenBox.TextSize = 11
 tokenBox.ClearTextOnFocus = false
 tokenBox.Parent = pData
 Instance.new("UICorner",tokenBox).CornerRadius = UDim.new(0,6)
 
-addButton(pData,"APLICAR TOKEN E TESTAR ENVIO",function()
+addButton(pData,"APLICAR TOKEN E ENVIAR FILA",function()
     COLLECTOR_TOKEN = tokenBox.Text:gsub("^%s+",""):gsub("%s+$","")
 
     if COLLECTOR_TOKEN=="" then
-        statusLabel.Text = "Token vazio. Cole o token atual primeiro."
+        statusLabel.Text = "Token vazio. Cole o valor do segredo."
         return
     end
 
-    statusLabel.Text = "Token aplicado. Tentando enviar a fila..."
+    statusLabel.Text = "Token aplicado. Tentando enviar..."
     flushReports()
 end)
 
 reportBox = Instance.new("TextBox")
-reportBox.Size = UDim2.new(1,-6,0,190)
+reportBox.Size = UDim2.new(1,-6,0,210)
 reportBox.BackgroundColor3 = Color3.fromRGB(10,10,13)
 reportBox.TextColor3 = Color3.new(1,1,1)
-reportBox.PlaceholderText = "O relatório integral aparecerá aqui..."
+reportBox.PlaceholderText = "Use GERAR/COPIAR RELATÓRIO para preencher este campo..."
 reportBox.Text = ""
 reportBox.TextSize = 10
 reportBox.TextWrapped = false
@@ -1513,13 +1485,15 @@ reportBox.MultiLine = true
 reportBox.Parent = pData
 Instance.new("UICorner",reportBox).CornerRadius = UDim.new(0,6)
 
-addButton(pData,"COPIAR RELATÓRIO INTEIRO",copyFullReport)
+addButton(pData,"GERAR E COPIAR RELATÓRIO INTEIRO",copyFullReport)
 
 addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
+    statusLabel.Text = "Atualizando dados..."
     local a = scanGame()
     flushReports()
 
-    statusLabel.Text = "Varredura concluída | Novos: "..a
+    statusLabel.Text =
+        "Varredura concluída | Novos: "..a
         .." | Registros: "..#records
         .." | Pendentes: "..#sendQueue
 end)
@@ -1534,6 +1508,7 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
     scanCount = 0
     startTime = os.clock()
     lastScan = "Nenhuma"
+    lastDataScan = 0
 
     reportBox.Text = ""
     statusLabel.Text = "Relatório local limpo"
@@ -1546,7 +1521,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V19",
+        "DIAGNÓSTICO DE STAMINA V20",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -1635,46 +1610,48 @@ restore.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- ATUALIZAÇÃO AUTOMÁTICA
+-- ATUALIZAÇÃO OTIMIZADA
 --==============================================================
 
 task.spawn(function()
+    local lastESP = 0
+    local lastDoor = 0
+    local lastStamina = 0
+
     while gui and gui.Parent do
-        if states.ESPPlayers or states.ESPMonsters or states.ESPDucts then
-            refreshESP()
-        else
-            local anyRarity = false
+        local now = os.clock()
 
-            for _,enabled in pairs(rarityEnabled) do
-                if enabled then
-                    anyRarity = true
-                    break
+        -- ESP: intervalo maior para reduzir trabalho no celular.
+        if now-lastESP>=5 then
+            if states.ESPPlayers or states.ESPMonsters or states.ESPDucts then
+                refreshESP()
+            else
+                local anyRarity = false
+                for _,enabled in pairs(rarityEnabled) do
+                    if enabled then anyRarity=true break end
                 end
+                if anyRarity then refreshESP() end
             end
-
-            if anyRarity then refreshESP() end
+            lastESP = now
         end
 
-        if states.RemoveDoors then
+        -- Portas: reaplica somente nas peças já encontradas.
+        if states.RemoveDoors and now-lastDoor>=0.25 then
             refreshDoorCollision()
+            lastDoor = now
         end
 
-        if states.AntiFlash then
-            inspectFlashRoot(Lighting)
-            inspectFlashRoot(PlayerGui)
-            inspectFlashRoot(Workspace.CurrentCamera)
-        end
-
-        if states.InfiniteStamina then
+        -- Stamina: não faz require/varredura a cada ciclo.
+        if states.InfiniteStamina and now-lastStamina>=8 then
             findStaminaObjects()
+            lastStamina = now
         end
 
-        if states.DataCollector then
-            local a = scanGame()
+        -- Anti-Flash é baseado em eventos, sem varredura contínua.
 
-            if not sendBusy then
-                flushReports()
-            end
+        -- Coleta: primeira varredura e depois intervalo de 45 segundos.
+        if states.DataCollector and now-lastDataScan>=45 then
+            local a = scanGame()
 
             if statusLabel and not sendBusy then
                 statusLabel.Text =
@@ -1683,9 +1660,11 @@ task.spawn(function()
                     .." | Pendentes: "..#sendQueue
                     .." | "..lastHTTP
             end
+
+            flushReports()
         end
 
-        task.wait(states.DataCollector and 8 or 1.5)
+        task.wait(0.25)
     end
 end)
 
@@ -1711,4 +1690,4 @@ gui.Destroying:Connect(function()
     end
 end)
 
-print("ROUBE OU MORRA V19 CARREGADO | Feito por Tales")
+print("ROUBE OU MORRA V20 CARREGADO | Feito por Tales")
