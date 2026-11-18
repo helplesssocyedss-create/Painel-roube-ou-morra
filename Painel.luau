@@ -1,7 +1,8 @@
 --==============================================================
--- ROUBE OU MORRA V24 | Feito por Tales
--- ESP corrigido | Anti-Flash reforçado | Relatório integral
--- Coleta Supabase | Otimização mobile
+-- ROUBE OU MORRA V25 | Feito por Tales
+-- ESP incremental | Coleta direcionada | Diagnóstico de stamina
+-- Monitoramento de entidades/flashbang | Fila de envio concorrente
+-- Otimização de desempenho mobile
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -14,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV24"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -51,20 +52,26 @@ local monsterNames = {
 }
 
 local highlights,labels = {},{}
-local espFolder = Workspace:FindFirstChild("TalesESP_V24_Folder")
+local espFolder = Workspace:FindFirstChild("TalesESP_V25_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V24_Folder"
+    espFolder.Name = "TalesESP_V25_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
 local savedEffects,savedOverlays = {},{}
 local savedLighting = {}
 local watchedFlashRoots = setmetatable({}, {__mode="k"})
+local reportedFlashObjects = setmetatable({}, {__mode="k"})
+local recentToolUseUntil = 0
+local recentToolSpawnCount = 0
+local lastActivatedToolName = ""
+local lastToolActivatedAt = 0
 
 local records,recordIndex = {},{}
 local sentKeys,queuedKeys,sendQueue = {},{},{}
 local MAX_RECORDS = 12000
+local SEND_WORKERS = 3
 
 local SUPABASE_URL = "https://nqafhfadocgqkzboyxpp.supabase.co"
 local COLLECTOR_TOKEN = ""
@@ -78,6 +85,9 @@ local lastScan = "Nenhuma"
 local lastDataScan = 0
 local espBusy = false
 local espGeneration = 0
+local espCandidateList,espCandidateSet = {},setmetatable({}, {__mode="k"})
+local espCacheBuilt = false
+local espLastRefresh = 0
 local farmGeneration = 0
 local showPage
 
@@ -112,58 +122,61 @@ end
 local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
 
-    -- Nome/tags/atributos explícitos continuam valendo para NPCs e personagens.
-    if contains(model.Name,monsterNames) then return true end
-
-    local ok,tags = pcall(function()
-        return CollectionService:GetTags(model)
-    end)
-    if ok then
-        for _,tag in ipairs(tags) do
-            if contains(tag,{"monster","enemy","monstro","inimigo","creature"}) then
-                return true
-            end
-        end
-    end
-
-    local markerKeys = {
-        "IsMonster","Monster","IsEnemy","Enemy","EntityType","NPCType",
-        "Role","CharacterType","MonsterName","TeamRole","Class","CharacterClass"
-    }
-    local containers = {model}
+    -- Primeiro: atributos sem depender do nome exibido (inclui player que virou entidade).
     local owner = getPlayerFromModel(model)
-    if owner then
-        table.insert(containers,owner)
-    end
+    local containers = {model}
+    if owner then table.insert(containers,owner) end
 
+    local entityKeys = {
+        "IsEntity","IsMonster","IsEnemy","Monster","Enemy",
+        "EntityKind","EntityType","EntitySelected","EntityStage",
+        "Role","TeamRole","CharacterType","NPCType","Class","CharacterClass"
+    }
     for _,container in ipairs(containers) do
-        for _,key in ipairs(markerKeys) do
+        for _,key in ipairs(entityKeys) do
             local value = container:GetAttribute(key)
             if value == true then return true end
-            if type(value)=="string" and contains(value,{
-                "monster","monstro","enemy","inimigo","creature"
-            }) then
+            if type(value)=="string" and value~="" then
+                local normalized = string.lower(value)
+                if key=="IsEntity" or key=="IsMonster" or key=="IsEnemy"
+                    or key=="Monster" or key=="Enemy" then
+                    if normalized=="true" or normalized=="1" then return true end
+                elseif contains(normalized,{
+                    "monster","monstro","enemy","inimigo","creature",
+                    "hollow","locust","entity","entidade","hunter"
+                }) then
+                    return true
+                end
+            end
+        end
+    end
+
+    -- Tags são uma segunda fonte; nomes são apenas fallback, nunca filtro exclusivo.
+    local ok,tags = pcall(function() return CollectionService:GetTags(model) end)
+    if ok then
+        for _,tag in ipairs(tags) do
+            if contains(tag,{"monster","enemy","monstro","inimigo","creature","entity"}) then
                 return true
             end
         end
     end
 
-    -- Alguns jogos replicam a função em BoolValue/StringValue dentro do personagem.
-    for _,obj in ipairs(model:GetDescendants()) do
-        if obj:IsA("BoolValue") and obj.Value then
-            if contains(obj.Name,{"monster","monstro","enemy","inimigo"}) then
-                return true
-            end
-        elseif (obj:IsA("StringValue") or obj:IsA("ObjectValue"))
-            and contains(obj.Name,{"role","class","type","monster","monstro"}) then
-            if obj:IsA("StringValue") and contains(obj.Value,{
-                "monster","monstro","enemy","inimigo","creature"
-            }) then
+    if contains(model.Name,monsterNames) then return true end
+
+    -- Values replicados dentro do modelo/personagem.
+    local valueObjects = (owner or model:FindFirstChildOfClass("Humanoid"))
+        and model:GetDescendants() or model:GetChildren()
+    for _,obj in ipairs(valueObjects) do
+        if obj:IsA("BoolValue") and obj.Value
+            and contains(obj.Name,{"monster","enemy","entity","monstro","inimigo"}) then
+            return true
+        elseif obj:IsA("StringValue")
+            and contains(obj.Name,{"role","class","type","monster","entity","team"}) then
+            if contains(obj.Value,{"monster","monstro","enemy","inimigo","creature","entity","hollow","locust"}) then
                 return true
             end
         end
     end
-
     return false
 end
 
@@ -207,7 +220,7 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V24"
+        h.Name = "TalesESP_V25"
         h.Adornee = obj
         h.FillTransparency = 0.88
         h.OutlineTransparency = 0
@@ -238,7 +251,7 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V24"
+        bill.Name = "TalesESPLabel_V25"
         bill.AlwaysOnTop = true
         bill.Size = small and UDim2.fromOffset(118,18)
             or UDim2.fromOffset(104,16)
@@ -298,6 +311,25 @@ local function isDuctRoot(obj)
 end
 
 local espPending = false
+
+local function registerESPCandidate(obj)
+    if not obj or espCandidateSet[obj] then return end
+    if obj:IsA("Model") or obj:IsA("BasePart") then
+        espCandidateSet[obj] = true
+        table.insert(espCandidateList,obj)
+    end
+end
+
+local function buildESPCacheOnce()
+    if espCacheBuilt then return end
+    espCacheBuilt = true
+    -- Uma varredura inicial única; atualizações seguintes são incrementais.
+    for index,obj in ipairs(Workspace:GetDescendants()) do
+        registerESPCandidate(obj)
+        if index%350==0 then task.wait() end
+    end
+end
+
 local function refreshESP()
     if espBusy then
         espPending = true
@@ -324,19 +356,22 @@ local function refreshESP()
             end
         end
 
-        local descendants = Workspace:GetDescendants()
+        buildESPCacheOnce()
+        local candidates = espCandidateList
 
-        for index,obj in ipairs(descendants) do
+        for index,obj in ipairs(candidates) do
             if generation~=espGeneration then break end
             if not gui or not gui.Parent then break end
 
             if obj:IsA("Model") then
                 local plr = getPlayerFromModel(obj)
 
-                if plr and plr~=player and states.ESPPlayers then
+                if plr and plr~=player and states.ESPMonsters and isMonster(obj) then
+                    createESP(obj,Color3.fromRGB(255,35,35),plr.Name.." [ENTIDADE]",false)
+                    keep[obj] = true
+                elseif plr and plr~=player and states.ESPPlayers then
                     createESP(obj,Color3.fromRGB(40,140,255),plr.Name,false)
                     keep[obj] = true
-
                 elseif states.ESPMonsters and isMonster(obj) then
                     createESP(obj,Color3.fromRGB(255,35,35),obj.Name,false)
                     keep[obj] = true
@@ -389,6 +424,16 @@ local function refreshESP()
             end
         end
 
+        local compact={}
+        for _,candidate in ipairs(espCandidateList) do
+            if candidate and candidate.Parent then
+                table.insert(compact,candidate)
+            else
+                espCandidateSet[candidate]=nil
+            end
+        end
+        espCandidateList=compact
+
         espBusy = false
 
         if espPending or generation~=espGeneration then
@@ -398,11 +443,17 @@ local function refreshESP()
     end)
 end
 
+local espRefreshScheduled=false
 Workspace.DescendantAdded:Connect(function(obj)
-    if states.ESPPlayers or states.ESPMonsters or states.ESPDucts then
-        if obj:IsA("Model") then
-            task.defer(refreshESP)
-        end
+    registerESPCandidate(obj)
+    if (states.ESPPlayers or states.ESPMonsters or states.ESPDucts)
+        and (obj:IsA("Model") or obj:IsA("BasePart"))
+        and not espRefreshScheduled then
+        espRefreshScheduled=true
+        task.delay(0.6,function()
+            espRefreshScheduled=false
+            if gui and gui.Parent then refreshESP() end
+        end)
     end
 end)
 
@@ -534,8 +585,9 @@ local function setDoors(enabled)
         return
     end
 
-    for _,obj in ipairs(Workspace:GetDescendants()) do
+    for index,obj in ipairs(Workspace:GetDescendants()) do
         if isTargetDoor(obj) then hidePart(obj) end
+        if index%300==0 then task.wait() end
     end
 end
 
@@ -579,13 +631,12 @@ local function setInstant(enabled)
     states.InstantCollection = enabled
 
     if enabled then
-        for _,obj in ipairs(Workspace:GetDescendants()) do
+        for index,obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("ProximityPrompt") then
-                if savedPrompts[obj]==nil then
-                    savedPrompts[obj] = obj.HoldDuration
-                end
+                if savedPrompts[obj]==nil then savedPrompts[obj]=obj.HoldDuration end
                 pcall(function() obj.HoldDuration=0 end)
             end
+            if index%350==0 then task.wait() end
         end
     else
         for obj,duration in pairs(savedPrompts) do
@@ -660,6 +711,7 @@ local function sendOne(item)
         return false,"Erro request(): "..tostring(res)
     end
 
+    res = res or {}
     local code = tonumber(res.StatusCode or res.Status) or 0
     local responseBody = tostring(res.Body or "")
 
@@ -684,13 +736,11 @@ end
 
 local function flushReports()
     if sendBusy or #sendQueue==0 then return end
-
     if not sendRequest then
         lastHTTP = "Executor sem suporte a request()"
         if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
-
     if COLLECTOR_TOKEN=="" then
         lastHTTP = "Token não informado"
         if statusLabel then statusLabel.Text=lastHTTP end
@@ -698,51 +748,59 @@ local function flushReports()
     end
 
     sendBusy = true
-
     task.spawn(function()
-        local sent = 0
-        local failed = false
+        local sentThisRound = 0
+        local failedMessage = nil
+        local finishedWorkers = 0
+        local stopWorkers = false
 
-        while #sendQueue>0 and states.DataCollector do
-            local item = table.remove(sendQueue,1)
-            if not item then break end
+        local function worker()
+            while states.DataCollector and not stopWorkers do
+                local item = table.remove(sendQueue,1)
+                if not item then break end
 
-            local ok,message = sendOne(item)
+                local ok,message = sendOne(item)
+                if ok then
+                    sentKeys[item.record_key] = true
+                    queuedKeys[item.record_key] = nil
+                    sentThisRound += 1
+                    lastHTTP = message
+                else
+                    table.insert(sendQueue,1,item)
+                    failedMessage = message
+                    lastHTTP = message
+                    stopWorkers = true
+                    break
+                end
 
-            if ok then
-                sentKeys[item.record_key] = true
-                queuedKeys[item.record_key] = nil
-                sent += 1
-                lastHTTP = message
-            else
-                table.insert(sendQueue,1,item)
-                failed = true
-                lastHTTP = message
-                break
+                if statusLabel then
+                    statusLabel.Text =
+                        "Enviados: "..sentThisRound
+                        .." | Pendentes: "..#sendQueue
+                        .." | "..lastHTTP
+                end
+                task.wait(0.03)
             end
-
-            if statusLabel then
-                statusLabel.Text =
-                    "Enviados: "..sent
-                    .." | Pendentes: "..#sendQueue
-                    .." | "..lastHTTP
-            end
-
-            task.wait(0.10)
+            finishedWorkers += 1
         end
+
+        local workerCount = math.min(SEND_WORKERS,#sendQueue)
+        for _=1,workerCount do task.spawn(worker) end
+        while finishedWorkers<workerCount do task.wait(0.05) end
 
         sendBusy = false
-
         if statusLabel then
             statusLabel.Text =
-                "Envio online | Rodada: "..sent
+                "Envio online | Rodada: "..sentThisRound
                 .." | Pendentes: "..#sendQueue
-                .." | "..lastHTTP
+                .." | "..(failedMessage or lastHTTP)
         end
 
-        if failed and states.DataCollector then
-            task.wait(10)
+        if failedMessage and states.DataCollector then
+            task.wait(8)
             if states.DataCollector then flushReports() end
+        elseif #sendQueue>0 and states.DataCollector then
+            task.defer(flushReports)
         end
     end)
 end
@@ -754,93 +812,133 @@ end
 local function scanGame()
     scanCount += 1
     lastScan = os.date("%d/%m/%Y %H:%M:%S")
-
     local added,updated = 0,0
-    local descendants = Workspace:GetDescendants()
+    local visited = {}
 
-    for index,obj in ipairs(descendants) do
-        if not gui or not gui.Parent then break end
-
-        if obj:IsA("Model") or obj:IsA("BasePart")
-            or obj:IsA("ProximityPrompt") then
-
-            local ok,path = pcall(function()
-                return obj:GetFullName()
-            end)
-
-            path = ok and path or obj.Name
-            local key = obj.ClassName.."|"..path
-
-            local entry = {
-                Name=obj.Name,
-                Class=obj.ClassName,
-                Path=path
-            }
-
-            local attrs = obj:GetAttributes()
-            if next(attrs) then
-                entry.Attributes = {}
-                for k,v in pairs(attrs) do
-                    entry.Attributes[k] = tostring(v)
-                end
-            end
-
-            if obj:IsA("BasePart") then
-                entry.Position = tostring(obj.Position)
-                entry.CanCollide = tostring(obj.CanCollide)
-                entry.Size = tostring(obj.Size)
-            elseif obj:IsA("ProximityPrompt") then
-                entry.HoldDuration = obj.HoldDuration
-                entry.ActionText = obj.ActionText
-                entry.ObjectText = obj.ObjectText
-                entry.Enabled = obj.Enabled
-                entry.MaxActivationDistance = obj.MaxActivationDistance
-            end
-
-            if recordIndex[key] then
-                records[recordIndex[key]] = entry
-                updated += 1
-            elseif #records<MAX_RECORDS then
-                table.insert(records,entry)
-                recordIndex[key] = #records
-                added += 1
-            end
-
-            queueReport(entry,key)
+    local function shouldCapture(obj,rootName)
+        if obj:IsA("Tool") or obj:IsA("Explosion") or obj:IsA("Humanoid")
+            or obj:IsA("ProximityPrompt") then return true end
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") then return true end
+        if obj:IsA("BoolValue") or obj:IsA("StringValue") then
+            return contains(obj.Name,{"role","entity","monster","stamina","sprint","energy","resist","endurance","flash"})
         end
-
-        if index%150==0 then task.wait() end
+        if obj:IsA("Model") and obj==player.Character then return true end
+        if obj:IsA("GuiObject") then return true end
+        local attrs = obj:GetAttributes()
+        for key in pairs(attrs) do
+            if contains(key,{"stamina","sprint","energy","resist","endurance","entity","monster","role","flash"}) then
+                return true
+            end
+        end
+        return false
     end
 
-    -- Contexto do jogador e do personagem local: função/monstro e atributos
-    -- que estejam efetivamente replicados para este cliente.
+    local function capture(obj,rootName)
+        if not obj or visited[obj] or not shouldCapture(obj,rootName) then return end
+        visited[obj]=true
+        local ok,path=pcall(function() return obj:GetFullName() end)
+        path=ok and path or (rootName.."/"..obj.Name)
+        local key=obj.ClassName.."|"..path
+        local entry={
+            Event="TargetedObjectSnapshot",
+            Name=obj.Name,Class=obj.ClassName,Path=path,
+            Root=rootName,CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }
+        local attrs=obj:GetAttributes()
+        if next(attrs) then
+            entry.Attributes={}
+            for k,val in pairs(attrs) do entry.Attributes[k]=tostring(val) end
+        end
+        if obj:IsA("ValueBase") then
+            pcall(function() entry.Value=tostring(obj.Value) end)
+        elseif obj:IsA("Tool") then
+            entry.ToolTip=obj.ToolTip
+            entry.RequiresHandle=obj.RequiresHandle
+        elseif obj:IsA("ProximityPrompt") then
+            entry.HoldDuration=obj.HoldDuration
+            entry.ActionText=obj.ActionText
+            entry.ObjectText=obj.ObjectText
+            entry.Enabled=obj.Enabled
+        elseif obj:IsA("Explosion") then
+            entry.Position=tostring(obj.Position)
+            entry.BlastRadius=obj.BlastRadius
+        elseif obj:IsA("Humanoid") then
+            entry.Health=obj.Health
+            entry.MaxHealth=obj.MaxHealth
+            entry.WalkSpeed=obj.WalkSpeed
+            entry.MoveDirection=tostring(obj.MoveDirection)
+            entry.FloorMaterial=tostring(obj.FloorMaterial)
+        elseif obj:IsA("GuiObject") then
+            entry.Visible=obj.Visible
+            entry.Size=tostring(obj.Size)
+            entry.AbsoluteSize=tostring(obj.AbsoluteSize)
+            if obj:IsA("Frame") then
+                entry.BackgroundColor3=tostring(obj.BackgroundColor3)
+                entry.BackgroundTransparency=obj.BackgroundTransparency
+            elseif obj:IsA("TextLabel") then
+                entry.Text=obj.Text
+            elseif obj:IsA("ImageLabel") then
+                entry.Image=obj.Image
+                entry.ImageColor3=tostring(obj.ImageColor3)
+                entry.ImageTransparency=obj.ImageTransparency
+            end
+        end
+
+        if recordIndex[key] then
+            records[recordIndex[key]]=entry
+            updated+=1
+        elseif #records<MAX_RECORDS then
+            table.insert(records,entry)
+            recordIndex[key]=#records
+            added+=1
+        end
+        queueReport(entry,key)
+    end
+
+    local roots={}
+    local function addRoot(root,label)
+        if root then table.insert(roots,{object=root,label=label}) end
+    end
+    addRoot(player,"Player")
+    addRoot(player.Character,"Character")
+    addRoot(player:FindFirstChildOfClass("PlayerScripts"),"PlayerScripts")
+    addRoot(player:FindFirstChildOfClass("Backpack") or player:FindFirstChild("Backpack"),"Backpack")
+    addRoot(PlayerGui,"PlayerGui")
+    addRoot(Lighting,"Lighting")
+    addRoot(Workspace.CurrentCamera,"Camera")
+
+    for _,rootInfo in ipairs(roots) do
+        local root=rootInfo.object
+        capture(root,rootInfo.label)
+        for index,obj in ipairs(root:GetDescendants()) do
+            capture(obj,rootInfo.label)
+            if index%250==0 then task.wait() end
+        end
+    end
+
     local function addPlayerSnapshot(plr)
-        local char = plr.Character
-        local data = {
-            Event="PlayerSnapshot",
-            PlayerName=plr.Name,
-            UserId=plr.UserId,
+        local char=plr.Character
+        local data={
+            Event="PlayerSnapshot",PlayerName=plr.Name,UserId=plr.UserId,
             Team=plr.Team and plr.Team.Name or "",
             Character=char and char.Name or "",
             IsLocalPlayer=(plr==player),
             IsMonster=char and isMonster(char) or false,
-            CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")
+            CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            PlayerAttributes={},CharacterAttributes={}
         }
-        local attrs = {}
-        for k,val in pairs(plr:GetAttributes()) do attrs[k]=tostring(val) end
+        for k,val in pairs(plr:GetAttributes()) do data.PlayerAttributes[k]=tostring(val) end
         if char then
-            data.CharacterClass=char.ClassName
-            data.CharacterAttributes={}
-            for k,val in pairs(char:GetAttributes()) do
-                data.CharacterAttributes[k]=tostring(val)
-            end
+            for k,val in pairs(char:GetAttributes()) do data.CharacterAttributes[k]=tostring(val) end
             local hum=char:FindFirstChildOfClass("Humanoid")
             if hum then
                 data.Health=hum.Health
                 data.MaxHealth=hum.MaxHealth
+                data.WalkSpeed=hum.WalkSpeed
+                data.MoveDirection=tostring(hum.MoveDirection)
+                data.HumanoidState=tostring(hum:GetState())
             end
         end
-        data.PlayerAttributes=attrs
         local key="PlayerSnapshot|"..tostring(plr.UserId)
         local idx=recordIndex[key]
         if idx then records[idx]=data
@@ -851,23 +949,25 @@ local function scanGame()
         end
         queueReport(data,key)
     end
+    for _,plr in ipairs(Players:GetPlayers()) do pcall(addPlayerSnapshot,plr) end
 
-    for _,plr in ipairs(Players:GetPlayers()) do
-        pcall(addPlayerSnapshot,plr)
-    end
-
-    lastDataScan = os.clock()
+    lastDataScan=os.clock()
     return added,updated
 end
 
 --==============================================================
--- V24: MONITORAMENTO DE PERSONAGENS, FUNÇÕES E EVENTOS
+-- V25: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
 --==============================================================
 
 local watchedPlayers = setmetatable({}, {__mode="k"})
 local watchedCharacters = setmetatable({}, {__mode="k"})
 local watchedTools = setmetatable({}, {__mode="k"})
+local watchedStats = setmetatable({}, {__mode="k"})
+local statLastReport = setmetatable({}, {__mode="k"})
 local eventSequence = 0
+local lastStaminaSample = 0
+local lastHudSample = 0
+local hudVisualState = setmetatable({}, {__mode="k"})
 
 local function safePath(obj)
     local ok,path=pcall(function() return obj:GetFullName() end)
@@ -876,35 +976,168 @@ end
 
 local function makeObjectReport(obj,eventName)
     if not obj then return end
-    local entry = {
+    local entry={
         Event=eventName or "ObjectObserved",
-        Name=obj.Name,
-        Class=obj.ClassName,
-        Path=safePath(obj),
-        CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        Attributes={}
+        Name=obj.Name,Class=obj.ClassName,Path=safePath(obj),
+        CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),Attributes={}
     }
     pcall(function()
-        for k,val in pairs(obj:GetAttributes()) do
-            entry.Attributes[k]=tostring(val)
-        end
+        for k,val in pairs(obj:GetAttributes()) do entry.Attributes[k]=tostring(val) end
     end)
     if obj:IsA("Tool") then
         entry.ToolTip=obj.ToolTip
         entry.RequiresHandle=obj.RequiresHandle
+        entry.ParentPath=safePath(obj.Parent)
     elseif obj:IsA("Explosion") then
         entry.Position=tostring(obj.Position)
         entry.BlastRadius=obj.BlastRadius
         entry.BlastPressure=obj.BlastPressure
     elseif obj:IsA("ValueBase") then
         pcall(function() entry.Value=tostring(obj.Value) end)
+    elseif obj:IsA("Humanoid") then
+        entry.Health=obj.Health
+        entry.MaxHealth=obj.MaxHealth
+        entry.WalkSpeed=obj.WalkSpeed
+        entry.MoveDirection=tostring(obj.MoveDirection)
+        entry.State=tostring(obj:GetState())
+    elseif obj:IsA("GuiObject") then
+        entry.Visible=obj.Visible
+        entry.Size=tostring(obj.Size)
+        entry.AbsoluteSize=tostring(obj.AbsoluteSize)
+        if obj:IsA("Frame") then
+            entry.BackgroundColor3=tostring(obj.BackgroundColor3)
+            entry.BackgroundTransparency=obj.BackgroundTransparency
+        elseif obj:IsA("TextLabel") then
+            entry.Text=obj.Text
+        end
+    end
+    if eventName=="ObjectSpawnedAfterToolUse"
+        or eventName=="FlashVisualEffectDetected"
+        or eventName=="VisualEffectAfterToolActivation"
+        or eventName=="FullScreenWhiteFlashOverlayDetected" then
+        entry.RecentToolName=lastActivatedToolName
+        entry.SecondsSinceToolActivation=lastToolActivatedAt>0
+            and (os.clock()-lastToolActivatedAt) or nil
     end
     eventSequence+=1
     local key="Event|"..tostring(eventSequence).."|"..entry.Event.."|"..entry.Path
     queueReport(entry,key)
 end
 
-local function roleSnapshot(plr,reason)
+local function staminaSnapshot(reason)
+    local now=os.clock()
+    if now-lastStaminaSample<0.75 then return end
+    lastStaminaSample=now
+    local char=player.Character
+    local data={
+        Event="StaminaContext",
+        Reason=reason or "Sample",
+        CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        PlayerAttributes={},CharacterAttributes={}
+    }
+    for k,val in pairs(player:GetAttributes()) do data.PlayerAttributes[k]=tostring(val) end
+    if char then
+        for k,val in pairs(char:GetAttributes()) do data.CharacterAttributes[k]=tostring(val) end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            data.Health=hum.Health
+            data.WalkSpeed=hum.WalkSpeed
+            data.MoveDirection=tostring(hum.MoveDirection)
+            data.HumanoidState=tostring(hum:GetState())
+        end
+        local statValues={}
+        for _,obj in ipairs(char:GetDescendants()) do
+            if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
+                or (obj:IsA("ValueBase") and contains(obj.Name,{
+                    "stamina","sprint","energy","resist","endurance","folego","fôlego"
+                })) then
+                local ok,value=pcall(function() return obj.Value end)
+                if ok then statValues[safePath(obj)]=tostring(value) end
+            end
+        end
+        local scripts=player:FindFirstChild("PlayerScripts")
+        if scripts then
+            for _,obj in ipairs(scripts:GetDescendants()) do
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                    local ok,value=pcall(function() return obj.Value end)
+                    if ok then statValues[safePath(obj)]=tostring(value) end
+                end
+            end
+        end
+        data.CharacterValues=statValues
+    end
+
+    -- A barra pode ser apenas visual. Durante corrida/parada, compara alguns
+    -- elementos de HUD e relata mudanças de tamanho/cor/texto sem assumir nomes.
+    if reason=="Running" or reason=="Stopped" then
+        if now-lastHudSample>=1.5 then
+            lastHudSample=now
+            local changed=0
+            for _,obj in ipairs(PlayerGui:GetDescendants()) do
+                local candidate=obj:IsA("Frame") or obj:IsA("ImageLabel")
+                    or (obj:IsA("TextLabel") and tonumber(obj.Text)~=nil)
+                if candidate then
+                    local signature=tostring(obj.Size).."|"..tostring(obj.Visible)
+                    if obj:IsA("Frame") then
+                        signature=signature.."|"..tostring(obj.BackgroundColor3)
+                            .."|"..tostring(obj.BackgroundTransparency)
+                    elseif obj:IsA("ImageLabel") then
+                        signature=signature.."|"..tostring(obj.ImageColor3)
+                            .."|"..tostring(obj.ImageTransparency)
+                    elseif obj:IsA("TextLabel") then
+                        signature=signature.."|"..obj.Text
+                    end
+                    local previous=hudVisualState[obj]
+                    hudVisualState[obj]=signature
+                    if previous and previous~=signature and changed<8 then
+                        changed+=1
+                        local hudEntry={
+                            Event="HUDVisualChangedDuringRun",
+                            Reason=reason,Path=safePath(obj),Name=obj.Name,
+                            Class=obj.ClassName,Previous=previous,Current=signature,
+                            CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")
+                        }
+                        queueReport(hudEntry,"HUDChange|"..safePath(obj).."|"..tostring(math.floor(now*2)))
+                    end
+                end
+            end
+        end
+    end
+
+    queueReport(data,"StaminaContext|"..tostring(reason).."|"..tostring(math.floor(os.clock()*2)))
+end
+
+local roleSnapshot
+
+local function watchStatObject(obj,source)
+    if not obj or not obj:IsA("ValueBase") or watchedStats[obj] then return end
+    local isNumeric=obj:IsA("NumberValue") or obj:IsA("IntValue")
+    local named=contains(obj.Name,{
+        "stamina","sprint","energy","resist","endurance","folego","fôlego",
+        "role","entity","monster","enemy","team","class","type","flash"
+    })
+    if not isNumeric and not named then return end
+    watchedStats[obj]=true
+    makeObjectReport(obj,isNumeric and "NumericStatObserved" or "NamedStateObserved")
+    obj.Changed:Connect(function()
+        if contains(obj.Name,{"role","entity","monster","enemy","team","class","type"}) then
+            local current=obj.Parent
+            while current and not current:IsA("Model") do current=current.Parent end
+            local owner=current and getPlayerFromModel(current)
+            if owner and roleSnapshot then
+                roleSnapshot(owner,"RoleValueChanged:"..obj.Name)
+            end
+            if states.ESPMonsters then task.defer(refreshESP) end
+        end
+        if not states.DataCollector then return end
+        local now=os.clock()
+        if now-(statLastReport[obj] or 0)<0.35 then return end
+        statLastReport[obj]=now
+        makeObjectReport(obj,isNumeric and "NumericStatChanged" or "NamedStateChanged")
+    end)
+end
+
+roleSnapshot = function(plr,reason)
     if not plr then return end
     local char=plr.Character
     local roleData={
@@ -953,22 +1186,30 @@ end
 local function watchTool(tool)
     if not tool or not tool:IsA("Tool") or watchedTools[tool] then return end
     watchedTools[tool]=true
-    if contains(tool.Name,{"grenade","flash","bomb","explosive","granada"}) then
-        makeObjectReport(tool,"GrenadeOrExplosiveToolDetected")
-    end
+    makeObjectReport(tool,"ToolObserved")
+
     tool.Equipped:Connect(function()
         makeObjectReport(tool,"ToolEquipped")
-        if states.DataCollector then flushReports() end
+        if states.DataCollector then staminaSnapshot("ToolEquipped") flushReports() end
     end)
     tool.Unequipped:Connect(function()
         makeObjectReport(tool,"ToolUnequipped")
         if states.DataCollector then flushReports() end
     end)
     tool.Activated:Connect(function()
+        recentToolUseUntil=os.clock()+8
+        recentToolSpawnCount=0
+        lastActivatedToolName=tool.Name
+        lastToolActivatedAt=os.clock()
         makeObjectReport(tool,"ToolActivated")
-        if states.DataCollector then flushReports() end
+        if states.DataCollector then
+            staminaSnapshot("ToolActivated")
+            flushReports()
+        end
     end)
 end
+
+local watchFlashRoot, inspectFlashRoot
 
 local function watchCharacter(char,plr)
     if not char or watchedCharacters[char] then return end
@@ -977,34 +1218,51 @@ local function watchCharacter(char,plr)
 
     char.AttributeChanged:Connect(function(attributeName)
         roleSnapshot(plr,"CharacterAttributeChanged:"..tostring(attributeName))
+        if plr==player then staminaSnapshot("CharacterAttributeChanged:"..tostring(attributeName)) end
     end)
+
+    local hum=char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid",5)
+    if hum and hum:IsA("Humanoid") then
+        hum.AttributeChanged:Connect(function(attributeName)
+            if plr==player then
+                makeObjectReport(hum,"HumanoidAttributeChanged:"..tostring(attributeName))
+                staminaSnapshot("HumanoidAttributeChanged:"..tostring(attributeName))
+            end
+        end)
+        hum.Died:Connect(function()
+            makeObjectReport(hum,"HumanoidDied")
+            roleSnapshot(plr,"HumanoidDied")
+        end)
+        hum.Running:Connect(function(speed)
+            if plr==player and states.DataCollector then
+                staminaSnapshot(speed>0 and "Running" or "Stopped")
+            end
+        end)
+        hum.StateChanged:Connect(function(_,newState)
+            roleSnapshot(plr,"HumanoidState:"..tostring(newState))
+            if plr==player and states.DataCollector then
+                staminaSnapshot("HumanoidState:"..tostring(newState))
+            end
+        end)
+    end
+
     char.DescendantAdded:Connect(function(obj)
         if obj:IsA("Tool") then watchTool(obj) end
-        if obj:IsA("ValueBase") and contains(obj.Name,{
-            "stamina","energy","resist","endurance","folego","fôlego"
-        }) then
-            makeObjectReport(obj,"StaminaOrResistanceAdded")
-            obj.Changed:Connect(function()
-                makeObjectReport(obj,"StaminaOrResistanceChanged")
-                if states.DataCollector then flushReports() end
-            end)
-        elseif obj:IsA("ValueBase") then
-            makeObjectReport(obj,"CharacterValueAdded")
-        end
+        if obj:IsA("ValueBase") then watchStatObject(obj,"Character") end
         if obj:IsA("Model") or obj:IsA("Humanoid") then
             roleSnapshot(plr,"CharacterDescendantAdded:"..obj.Name)
         end
     end)
+
     for _,obj in ipairs(char:GetDescendants()) do
         if obj:IsA("Tool") then watchTool(obj) end
-        if obj:IsA("ValueBase") and contains(obj.Name,{
-            "stamina","energy","resist","endurance","folego","fôlego"
-        }) then
-            makeObjectReport(obj,"StaminaOrResistanceFound")
-            obj.Changed:Connect(function()
-                makeObjectReport(obj,"StaminaOrResistanceChanged")
-                if states.DataCollector then flushReports() end
-            end)
+        if obj:IsA("ValueBase") then watchStatObject(obj,"Character") end
+    end
+    if plr==player then
+        staminaSnapshot("CharacterWatched")
+        if states.AntiFlash or states.DataCollector then
+            watchFlashRoot(char)
+            inspectFlashRoot(char)
         end
     end
 end
@@ -1022,25 +1280,40 @@ local function watchPlayer(plr)
     end)
     plr.AttributeChanged:Connect(function(attributeName)
         roleSnapshot(plr,"PlayerAttributeChanged:"..tostring(attributeName))
+        if plr==player then staminaSnapshot("PlayerAttributeChanged:"..tostring(attributeName)) end
     end)
     plr.DescendantAdded:Connect(function(obj)
         if obj:IsA("Tool") then watchTool(obj) end
-        if obj:IsA("ValueBase") and contains(obj.Name,{
-            "stamina","energy","resist","endurance","folego","fôlego"
-        }) then
-            makeObjectReport(obj,"PlayerStatAdded")
-            obj.Changed:Connect(function()
-                makeObjectReport(obj,"PlayerStatChanged")
-                if states.DataCollector then flushReports() end
-            end)
-        end
+        if obj:IsA("ValueBase") then watchStatObject(obj,"Player") end
     end)
     if plr.Character then watchCharacter(plr.Character,plr) end
-    for _,obj in ipairs(plr:GetChildren()) do
-        if obj:IsA("Tool") then watchTool(obj) end
+    local backpack=plr:FindFirstChild("Backpack") or plr:WaitForChild("Backpack",3)
+    if backpack then
+        for _,obj in ipairs(backpack:GetChildren()) do
+            if obj:IsA("Tool") then watchTool(obj) end
+        end
+        backpack.ChildAdded:Connect(function(obj)
+            if obj:IsA("Tool") then watchTool(obj) end
+        end)
+    end
+    local scripts=plr:FindFirstChild("PlayerScripts")
+    if scripts then
+        for _,obj in ipairs(scripts:GetDescendants()) do
+            if obj:IsA("ValueBase") then watchStatObject(obj,"PlayerScripts") end
+        end
+        scripts.DescendantAdded:Connect(function(obj)
+            if obj:IsA("ValueBase") then watchStatObject(obj,"PlayerScripts") end
+        end)
     end
     roleSnapshot(plr,"PlayerObserved")
 end
+
+for _,obj in ipairs(PlayerGui:GetDescendants()) do
+    if obj:IsA("ValueBase") then watchStatObject(obj,"PlayerGui") end
+end
+PlayerGui.DescendantAdded:Connect(function(obj)
+    if obj:IsA("ValueBase") then watchStatObject(obj,"PlayerGui") end
+end)
 
 for _,plr in ipairs(Players:GetPlayers()) do watchPlayer(plr) end
 Players.PlayerAdded:Connect(watchPlayer)
@@ -1053,15 +1326,75 @@ Players.PlayerRemoving:Connect(function(plr)
     end
 end)
 
+local watchedEntityModels=setmetatable({}, {__mode="k"})
+local entityDiscoveryDone=false
+
+local function watchEntityModel(model)
+    if not model or not model:IsA("Model") or watchedEntityModels[model] then return end
+    watchedEntityModels[model]=true
+    local function checkEntity(reason)
+        if isMonster(model) then
+            makeObjectReport(model,reason or "EntityModelDetected")
+            if states.ESPMonsters then task.defer(refreshESP) end
+        end
+    end
+    checkEntity("EntityModelDetected")
+    model.AttributeChanged:Connect(function(attributeName)
+        checkEntity("EntityAttributeChanged:"..tostring(attributeName))
+    end)
+    for _,obj in ipairs(model:GetDescendants()) do
+        if obj:IsA("ValueBase") then watchStatObject(obj,"EntityModel") end
+    end
+    model.DescendantAdded:Connect(function(obj)
+        if obj:IsA("ValueBase") then watchStatObject(obj,"EntityModel") end
+        if obj:IsA("Humanoid") then checkEntity("EntityHumanoidAdded") end
+    end)
+end
+
+local function discoverExistingEntities()
+    if entityDiscoveryDone then return end
+    entityDiscoveryDone=true
+    -- Percorre apenas contêineres e Models: não inspeciona cada peça/objeto do mapa.
+    local visited=0
+    local lastYield=0
+    local function walk(container,depth)
+        if not container or depth>14 then return end
+        for _,child in ipairs(container:GetChildren()) do
+            if child:IsA("Model") then
+                watchEntityModel(child)
+                visited+=1
+            end
+            if child:IsA("Folder") or child:IsA("Model") then
+                walk(child,depth+1)
+            end
+            if visited-lastYield>=100 then
+                lastYield=visited
+                task.wait()
+            end
+        end
+    end
+    walk(Workspace,0)
+end
+
 Workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Model") then
+        watchEntityModel(obj)
+    end
     if obj:IsA("Explosion") then
         makeObjectReport(obj,"ExplosionCreated")
         if states.DataCollector then task.defer(flushReports) end
-    elseif obj:IsA("Tool") then
-        watchTool(obj)
-    elseif contains(obj.Name,{"grenade","flashbang","flash_bang","explosion","granada"}) then
-        makeObjectReport(obj,"GrenadeOrFlashObjectCreated")
-        if states.DataCollector then task.defer(flushReports) end
+        return
+    end
+
+    if obj:IsA("Tool") then watchTool(obj) end
+
+    -- Sem depender do nome: objetos que surgem logo após ativar uma ferramenta
+    -- são candidatos a projétil/artefato lançado. Limite evita capturar o mapa inteiro.
+    if states.DataCollector and os.clock()<=recentToolUseUntil
+        and recentToolSpawnCount<24
+        and (obj:IsA("Model") or obj:IsA("BasePart")) then
+        recentToolSpawnCount+=1
+        makeObjectReport(obj,"ObjectSpawnedAfterToolUse")
     end
 end)
 
@@ -1072,7 +1405,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V24 - RELATORIO",
+        "ROUBE OU MORRA V25 - RELATORIO",
         "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -1200,7 +1533,7 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V24
+-- ANTI-FLASH V25
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
@@ -1225,7 +1558,8 @@ local function isInsideShop(obj)
 end
 
 local function inspectFlashObject(obj)
-    if not states.AntiFlash or not obj or isInsideShop(obj) then
+    if (not states.AntiFlash and not states.DataCollector)
+        or not obj or isInsideShop(obj) then
         return
     end
 
@@ -1247,16 +1581,29 @@ local function inspectFlashObject(obj)
         end
     end
 
-    if flashEffect then
-        if savedEffects[obj]==nil then
-            savedEffects[obj] = obj.Enabled
+    local visualClass=obj:IsA("BlurEffect")
+        or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect")
+    local recentVisualCandidate=visualClass and os.clock()<=recentToolUseUntil
+
+    if (flashEffect or recentVisualCandidate) then
+        if states.DataCollector and not reportedFlashObjects[obj] then
+            reportedFlashObjects[obj]=true
+            makeObjectReport(obj,flashEffect and "FlashVisualEffectDetected"
+                or "VisualEffectAfterToolActivation")
         end
-        pcall(function() obj.Enabled=false end)
+    end
+
+    if flashEffect then
+        if states.AntiFlash then
+            if savedEffects[obj]==nil then savedEffects[obj] = obj.Enabled end
+            pcall(function() obj.Enabled=false end)
+        end
     end
 
     if obj:IsA("Frame") or obj:IsA("ImageLabel") then
         local size = obj.AbsoluteSize
-        local screen = PlayerGui.AbsoluteSize
+        local camera=Workspace.CurrentCamera
+        local screen = camera and camera.ViewportSize or Vector2.new(0,0)
 
         if screen.X>0 and screen.Y>0
             and size.X>=screen.X*0.88
@@ -1268,34 +1615,48 @@ local function inspectFlashObject(obj)
                 local c = obj.BackgroundColor3
                 white = c.R>0.88 and c.G>0.88 and c.B>0.88
                     and obj.BackgroundTransparency<0.25
+            elseif obj:IsA("ImageLabel") then
+                local c=obj.ImageColor3
+                white=c.R>0.88 and c.G>0.88 and c.B>0.88
+                    and obj.ImageTransparency<0.25
             end
 
             if white then
-                if savedOverlays[obj]==nil then
-                    savedOverlays[obj] = obj.Visible
+                if states.DataCollector and not reportedFlashObjects[obj] then
+                    reportedFlashObjects[obj]=true
+                    makeObjectReport(obj,"FullScreenWhiteFlashOverlayDetected")
                 end
-                pcall(function() obj.Visible=false end)
+                if states.AntiFlash then
+                    if savedOverlays[obj]==nil then savedOverlays[obj] = obj.Visible end
+                    pcall(function() obj.Visible=false end)
+                end
             end
         end
     end
 end
 
-local function inspectFlashRoot(root)
+inspectFlashRoot = function(root)
     if not root then return end
-
-    for _,obj in ipairs(root:GetDescendants()) do
+    for index,obj in ipairs(root:GetDescendants()) do
         inspectFlashObject(obj)
+        if index%300==0 then task.wait() end
     end
 end
 
-local function watchFlashRoot(root)
+watchFlashRoot = function(root)
     if not root or watchedFlashRoots[root] then return end
     watchedFlashRoots[root] = true
 
     root.DescendantAdded:Connect(function(obj)
         task.defer(function()
-            inspectFlashObject(obj)
-            inspectFlashRoot(obj)
+            if obj and obj.Parent then
+                inspectFlashObject(obj)
+                if obj:IsA("GuiObject") then
+                    task.delay(0.15,function()
+                        if obj and obj.Parent then inspectFlashObject(obj) end
+                    end)
+                end
+            end
         end)
     end)
 end
@@ -1331,7 +1692,7 @@ local function setAntiFlash(enabled)
 end
 
 Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if states.AntiFlash then
+    if states.AntiFlash or states.DataCollector then
         local camera = Workspace.CurrentCamera
         watchFlashRoot(camera)
         inspectFlashRoot(camera)
@@ -1347,13 +1708,10 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA EXPERIMENTAL (MANTIDA DA V21)
+-- STAMINA V25: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
 --==============================================================
 
 local staminaOriginals = {}
-local staminaPatched = {}
-local staminaModuleLoaded = false
-
 local function isStaminaName(name)
     return contains(name,{
         "stamina","sprint","energy","energia",
@@ -1361,91 +1719,40 @@ local function isStaminaName(name)
     })
 end
 
-local function patchStaminaTable(tbl,depth,visited)
-    if type(tbl)~="table" or depth>6 or visited[tbl] then return end
-    visited[tbl] = true
-
-    for key,value in pairs(tbl) do
-        if type(value)=="number" and isStaminaName(tostring(key)) then
-            pcall(function() tbl[key]=999999 end)
-        elseif type(value)=="table" then
-            patchStaminaTable(value,depth+1,visited)
-        end
-    end
-end
-
-local function patchFunctionUpvalues(fn,depth)
-    if type(fn)~="function" or depth>4 or staminaPatched[fn] then return end
-    staminaPatched[fn] = true
-
-    local dbg = debug
-    if not dbg or type(dbg.getupvalue)~="function" then return end
-
-    for index=1,60 do
-        local ok,name,value = pcall(dbg.getupvalue,fn,index)
-        if not ok or name==nil then break end
-
-        if type(value)=="number" and isStaminaName(tostring(name)) then
-            if type(dbg.setupvalue)=="function" then
-                pcall(dbg.setupvalue,fn,index,999999)
-            end
-        elseif type(value)=="table" then
-            patchStaminaTable(value,0,{})
-        elseif type(value)=="function" then
-            patchFunctionUpvalues(value,depth+1)
-        end
-    end
-end
-
 local function findStaminaObjects()
-    local found = {}
-
-    local searchRoots = {player}
+    local found={}
+    local searchRoots={player}
     if player.Character then table.insert(searchRoots,player.Character) end
+    local scripts=player:FindFirstChild("PlayerScripts")
+    if scripts then table.insert(searchRoots,scripts) end
+    local backpack=player:FindFirstChild("Backpack")
+    if backpack then table.insert(searchRoots,backpack) end
     table.insert(searchRoots,PlayerGui)
 
-    local seenStats = {}
+    local seen={}
     for _,root in ipairs(searchRoots) do
         for _,obj in ipairs(root:GetDescendants()) do
-            if isStaminaName(obj.Name) and not seenStats[obj] then
-                seenStats[obj]=true
+            local candidate=isStaminaName(obj.Name)
+            if not candidate then
+                for key in pairs(obj:GetAttributes()) do
+                    if isStaminaName(key) then candidate=true break end
+                end
+            end
+            if candidate and not seen[obj] then
+                seen[obj]=true
                 table.insert(found,obj)
-
-                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
-                    if staminaOriginals[obj]==nil then
-                        staminaOriginals[obj]=obj.Value
-                    end
+                -- Só altera NumberValue/IntValue explicitamente identificados.
+                -- Não faz require() nem modifica upvalues de módulos desconhecidos.
+                if states.InfiniteStamina
+                    and (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
+                    if staminaOriginals[obj]==nil then staminaOriginals[obj]=obj.Value end
                     pcall(function() obj.Value=999999 end)
                 end
             end
         end
     end
-
-    local scripts = player:FindFirstChild("PlayerScripts")
-    local module = scripts and scripts:FindFirstChild("SprintStamina")
-
-    if module and module:IsA("ModuleScript") and not staminaModuleLoaded then
-        staminaModuleLoaded = true
-        local ok,result = pcall(require,module)
-
-        if ok then
-            if type(result)=="table" then
-                patchStaminaTable(result,0,{})
-                for _,value in pairs(result) do
-                    if type(value)=="function" then
-                        patchFunctionUpvalues(value,0)
-                    end
-                end
-            elseif type(result)=="function" then
-                patchFunctionUpvalues(result,0)
-            end
-            table.insert(found,module)
-        end
-    end
-
-    local hud = PlayerGui:FindFirstChild("StaminaHUD")
-    if hud then table.insert(found,hud) end
-
+    local hud=PlayerGui:FindFirstChild("StaminaHUD")
+    if hud and not seen[hud] then table.insert(found,hud) end
     return found
 end
 
@@ -1461,8 +1768,6 @@ local function setInfiniteStamina(enabled)
             end
         end
         table.clear(staminaOriginals)
-        table.clear(staminaPatched)
-        staminaModuleLoaded = false
     end
 end
 
@@ -1470,49 +1775,58 @@ end
 -- AUTO FARM
 --==============================================================
 
-local function setAutoFarm(enabled)
-    states.AutoFarm = enabled
-    farmGeneration += 1
+local promptCache={}
+local promptSet=setmetatable({}, {__mode="k"})
+local promptCacheBuilt=false
 
-    local generation = farmGeneration
+local function registerPrompt(obj)
+    if obj and obj:IsA("ProximityPrompt") and not promptSet[obj] then
+        promptSet[obj]=true
+        table.insert(promptCache,obj)
+    end
+end
+
+Workspace.DescendantAdded:Connect(registerPrompt)
+
+local function buildPromptCacheOnce()
+    if promptCacheBuilt then return end
+    promptCacheBuilt=true
+    for index,obj in ipairs(Workspace:GetDescendants()) do
+        registerPrompt(obj)
+        if index%400==0 then task.wait() end
+    end
+end
+
+local function setAutoFarm(enabled)
+    states.AutoFarm=enabled
+    farmGeneration+=1
+    local generation=farmGeneration
     if not enabled then return end
 
     task.spawn(function()
+        buildPromptCacheOnce()
         while generation==farmGeneration and gui and gui.Parent do
-            local char = player.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-
+            local char=player.Character
+            local root=char and char:FindFirstChild("HumanoidRootPart")
             if root then
-                local prompts = Workspace:GetDescendants()
-
-                for index,obj in ipairs(prompts) do
+                for index,obj in ipairs(promptCache) do
                     if generation~=farmGeneration then break end
-
-                    if obj:IsA("ProximityPrompt") and obj.Enabled then
-                        local part = obj.Parent
-
-                        if part and part:IsA("Attachment") then
-                            part = part.Parent
-                        end
-
+                    if obj and obj.Parent and obj.Enabled then
+                        local part=obj.Parent
+                        if part and part:IsA("Attachment") then part=part.Parent end
                         if part and part:IsA("BasePart")
-                            and (root.Position-part.Position).Magnitude
-                                <= obj.MaxActivationDistance then
-
+                            and (root.Position-part.Position).Magnitude<=obj.MaxActivationDistance then
                             pcall(function()
                                 obj:InputHoldBegin()
                                 task.wait(0.12)
                                 obj:InputHoldEnd()
                             end)
-
                             task.wait(0.25)
                         end
                     end
-
-                    if index%200==0 then task.wait() end
+                    if index%100==0 then task.wait() end
                 end
             end
-
             task.wait(1.5)
         end
     end)
@@ -1523,7 +1837,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV24"
+gui.Name = "RoubeOuMorraV25"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1551,7 +1865,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V24  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V25  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -1718,7 +2032,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V24] "..name..": "..tostring(err))
+                warn("[V25] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -1757,7 +2071,7 @@ for _,name in ipairs({
 end
 
 -- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V24 | Feito por Tales")
+addSection(pMain,"ROUBE OU MORRA V25 | Feito por Tales")
 addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
 addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
 
@@ -1786,17 +2100,26 @@ addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 addSection(pCollect,"COLETA")
 addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Stamina Infinita (experimental - depende do jogo)","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Stamina Infinita (experimental - apenas valores locais identificados)","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V24: monitorar personagem, função, ferramentas e explosões",function()
-    statusLabel.Text = "Cliente: coleta apenas objetos e atributos replicados/visíveis."
+addButton(pData,"V25: estamina, entidades, ferramentas, projéteis e clarões",function()
+    statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
 addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
     if enabled then
-        statusLabel.Text = "Iniciando varredura..."
+        statusLabel.Text = "Iniciando coleta direcionada..."
+        watchFlashRoot(Lighting)
+        watchFlashRoot(PlayerGui)
+        watchFlashRoot(player.Character)
+        watchFlashRoot(Workspace.CurrentCamera)
+        discoverExistingEntities()
+        inspectFlashRoot(Lighting)
+        inspectFlashRoot(PlayerGui)
+        inspectFlashRoot(player.Character)
+        inspectFlashRoot(Workspace.CurrentCamera)
         local a = scanGame()
         statusLabel.Text =
             "Coleta ativa | Novos: "..a
@@ -1903,7 +2226,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V24",
+        "DIAGNÓSTICO DE STAMINA V25",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -1996,28 +2319,16 @@ end)
 --==============================================================
 
 task.spawn(function()
-    local lastESP = 0
     local lastDoor = 0
     local lastStamina = 0
-    local lastAntiFlash = 0
 
     while gui and gui.Parent do
         local now = os.clock()
 
-        if now-lastESP>=2 then
-            local anyESP = states.ESPPlayers
-                or states.ESPMonsters
-                or states.ESPDucts
+        -- ESP é atualizado por ativação, troca de personagem e novos objetos.
+        -- Não existe mais varredura periódica do mapa inteiro.
 
-            for _,enabled in pairs(rarityEnabled) do
-                if enabled then anyESP=true break end
-            end
-
-            if anyESP then refreshESP() end
-            lastESP = now
-        end
-
-        if states.RemoveDoors and now-lastDoor>=0.25 then
+        if states.RemoveDoors and now-lastDoor>=1.0 then
             refreshDoorCollision()
             lastDoor = now
         end
@@ -2027,19 +2338,9 @@ task.spawn(function()
             lastStamina = now
         end
 
-        -- Alguns efeitos de clarão são criados antes de o observador ser ligado
-        -- ou alteram propriedades depois; reinspeciona os pontos visíveis.
-        if states.AntiFlash and now-lastAntiFlash>=0.5 then
-            pcall(function()
-                inspectFlashRoot(Lighting)
-                inspectFlashRoot(PlayerGui)
-                inspectFlashRoot(player.Character)
-                inspectFlashRoot(Workspace.CurrentCamera)
-            end)
-            lastAntiFlash=now
-        end
+        -- Anti-Flash é orientado a eventos: evita varrer toda a interface a cada 0,5s.
 
-        if states.DataCollector and now-lastDataScan>=45 then
+        if states.DataCollector and now-lastDataScan>=30 then
             local a = scanGame()
 
             if statusLabel and not sendBusy then
