@@ -1,8 +1,8 @@
 --==============================================================
--- ROUBE OU MORRA V26 | Feito por Tales
--- ESP incremental | ClassificaÃ§Ã£o rigorosa de entidades
--- ProteÃ§Ã£o contra falsos positivos visuais | Coleta otimizada
--- OtimizaÃ§Ã£o de desempenho mobile
+-- ROUBE OU MORRA V27 | Feito por Tales
+-- ESP incremental com limite de renderização | Classificação rigorosa de entidades
+-- Proteção contra falsos positivos visuais | Coleta otimizada
+-- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -52,10 +52,12 @@ local monsterNames = {
 }
 
 local highlights,labels = {},{}
-local espFolder = Workspace:FindFirstChild("TalesESP_V26_Folder")
+local previousESPFolder = Workspace:FindFirstChild("TalesESP_V26_Folder")
+if previousESPFolder then previousESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V27_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V26_Folder"
+    espFolder.Name = "TalesESP_V27_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -88,6 +90,10 @@ local espGeneration = 0
 local espCandidateList,espCandidateSet = {},setmetatable({}, {__mode="k"})
 local espCacheBuilt = false
 local espLastRefresh = 0
+-- Limites defensivos para manter o ESP utilizável em dispositivos móveis.
+-- Alvos muito distantes não recebem Highlight/label; o cache continua incremental.
+local MAX_ESP_OBJECTS = 90
+local MAX_ESP_DISTANCE = 450
 local farmGeneration = 0
 local showPage
 
@@ -152,8 +158,8 @@ local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
 
     local owner=getPlayerFromModel(model)
-    -- Para personagens de jogadores, nÃ£o usamos nome, texto genÃ©rico, classe ou
-    -- atributos de estado isolados. Exigimos uma marca explÃ­cita de entidade.
+    -- Para personagens de jogadores, não usamos nome, texto genérico, classe ou
+    -- atributos de estado isolados. Exigimos uma marca explícita de entidade.
     if owner then
         if hasExplicitEntityFlag(model) or hasExplicitEntityFlag(owner) then
             return true
@@ -251,7 +257,7 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V26"
+        h.Name = "TalesESP_V27"
         h.Adornee = obj
         h.FillTransparency = 1
         h.OutlineTransparency = 0
@@ -282,7 +288,7 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V26"
+        bill.Name = "TalesESPLabel_V27"
         bill.AlwaysOnTop = true
         bill.Size = small and UDim2.fromOffset(118,18)
             or UDim2.fromOffset(104,16)
@@ -309,8 +315,8 @@ local function createESP(obj,color,textValue,small)
     bill.TextLabel.TextColor3 = color
 end
 
--- Identifica somente o prÃ³prio objeto duto, nÃ£o qualquer peÃ§a
--- que esteja prÃ³xima ou seja descendente dele.
+-- Identifica somente o próprio objeto duto, não qualquer peça
+-- que esteja próxima ou seja descendente dele.
 local function isDuctRoot(obj)
     if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then
         return false
@@ -354,11 +360,25 @@ end
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
-    -- Uma varredura inicial Ãºnica; atualizaÃ§Ãµes seguintes sÃ£o incrementais.
+    -- Uma varredura inicial única; atualizações seguintes são incrementais.
     for index,obj in ipairs(Workspace:GetDescendants()) do
         registerESPCandidate(obj)
         if index%350==0 then task.wait() end
     end
+end
+
+local function getESPWorldPosition(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then
+        local root = obj:FindFirstChild("HumanoidRootPart")
+            or obj.PrimaryPart
+            or obj:FindFirstChildWhichIsA("BasePart")
+        if root and root:IsA("BasePart") then return root.Position end
+        local ok, pivot = pcall(function() return obj:GetPivot() end)
+        if ok then return pivot.Position end
+    end
+    return nil
 end
 
 local function refreshESP()
@@ -389,20 +409,30 @@ local function refreshESP()
 
         buildESPCacheOnce()
         local candidates = espCandidateList
+        local renderedCount = 0
+        local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        local myPosition = myRoot and myRoot.Position or nil
 
         for index,obj in ipairs(candidates) do
             if generation~=espGeneration then break end
             if not gui or not gui.Parent then break end
 
-            if obj:IsA("Model") then
+            local worldPosition = getESPWorldPosition(obj)
+            local withinDistance = not myPosition or not worldPosition
+                or (worldPosition-myPosition).Magnitude <= MAX_ESP_DISTANCE
+            local canRender = renderedCount < MAX_ESP_OBJECTS and withinDistance
+
+            if canRender and obj:IsA("Model") then
                 local plr = getPlayerFromModel(obj)
 
                 if plr and plr~=player and states.ESPMonsters and isMonster(obj) then
                     createESP(obj,Color3.fromRGB(255,35,35),plr.Name..getEntityActivitySuffix(obj),false)
                     keep[obj] = true
+                    renderedCount += 1
                 elseif plr and plr~=player and states.ESPPlayers then
                     createESP(obj,Color3.fromRGB(40,140,255),plr.Name,false)
                     keep[obj] = true
+                    renderedCount += 1
                 elseif states.ESPMonsters and isMonster(obj) then
                     local displayName=obj:GetAttribute("DisplayName")
                     or obj:GetAttribute("EntityKind")
@@ -410,15 +440,18 @@ local function refreshESP()
                     or obj.Name
                     createESP(obj,Color3.fromRGB(255,35,35),tostring(displayName)..getEntityActivitySuffix(obj),false)
                     keep[obj] = true
+                    renderedCount += 1
                 end
             end
 
-            if states.ESPDucts and isDuctRoot(obj) then
+            if canRender and states.ESPDucts and isDuctRoot(obj) then
                 createESP(obj,Color3.fromRGB(255,170,40),nil,true)
                 keep[obj] = true
+                renderedCount += 1
             end
 
-            if obj:IsA("Model") or obj:IsA("BasePart") then
+            if canRender and renderedCount < MAX_ESP_OBJECTS
+                and (obj:IsA("Model") or obj:IsA("BasePart")) then
                 local rarity = getRarity(obj)
                 local parentMonster = obj.Parent
                     and obj.Parent:IsA("Model")
@@ -440,10 +473,11 @@ local function refreshESP()
                         true
                     )
                     keep[obj] = true
+                    renderedCount += 1
                 end
             end
 
-            if index%250==0 then task.wait() end
+            if index%180==0 then task.wait() end
         end
 
         if generation==espGeneration then
@@ -659,7 +693,7 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- COLETA INSTANTÃ‚NEA
+-- COLETA INSTANTÂNEA
 --==============================================================
 
 local function setInstant(enabled)
@@ -703,8 +737,8 @@ end
 local function queueReport(entry,key)
     if not states.DataCollector then return end
 
-    -- A mesma instÃ¢ncia pode mudar de estado; cada versÃ£o do conteÃºdo recebe
-    -- uma chave prÃ³pria, em vez de bloquear para sempre pelo caminho.
+    -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
+    -- uma chave própria, em vez de bloquear para sempre pelo caminho.
     local versionedKey = tostring(key).."|"..reportFingerprint(entry)
     if sentKeys[versionedKey] or queuedKeys[versionedKey] then return end
 
@@ -754,14 +788,14 @@ local function sendOne(item)
         return true,"HTTP "..code
     end
 
-    if code==409 then return true,"Registro jÃ¡ existente" end
+    if code==409 then return true,"Registro já existente" end
 
     if code==401 or code==403 then
         return false,"Token recusado (HTTP "..code..")"
     elseif code==404 then
-        return false,"FunÃ§Ã£o ingest-report nÃ£o encontrada (404)"
+        return false,"Função ingest-report não encontrada (404)"
     elseif code==429 then
-        return false,"Limite de requisiÃ§Ãµes (429)"
+        return false,"Limite de requisições (429)"
     elseif code>=500 then
         return false,"Supabase HTTP "..code..": "..responseBody
     end
@@ -777,7 +811,7 @@ local function flushReports()
         return
     end
     if COLLECTOR_TOKEN=="" then
-        lastHTTP = "Token nÃ£o informado"
+        lastHTTP = "Token não informado"
         if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
@@ -991,7 +1025,7 @@ local function scanGame()
 end
 
 --==============================================================
--- V26: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
+-- V27: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
 --==============================================================
 
 local watchedPlayers = setmetatable({}, {__mode="k"})
@@ -1084,7 +1118,7 @@ local function staminaSnapshot(reason)
         for _,obj in ipairs(char:GetDescendants()) do
             if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
                 or (obj:IsA("ValueBase") and contains(obj.Name,{
-                    "stamina","sprint","energy","resist","endurance","folego","fÃ´lego"
+                    "stamina","sprint","energy","resist","endurance","folego","fôlego"
                 })) then
                 local ok,value=pcall(function() return obj.Value end)
                 if ok then statValues[safePath(obj)]=tostring(value) end
@@ -1103,7 +1137,7 @@ local function staminaSnapshot(reason)
     end
 
     -- A barra pode ser apenas visual. Durante corrida/parada, compara alguns
-    -- elementos de HUD e relata mudanÃ§as de tamanho/cor/texto sem assumir nomes.
+    -- elementos de HUD e relata mudanças de tamanho/cor/texto sem assumir nomes.
     if reason=="Running" or reason=="Stopped" then
         if now-lastHudSample>=1.5 then
             lastHudSample=now
@@ -1148,7 +1182,7 @@ local function watchStatObject(obj,source)
     if not obj or not obj:IsA("ValueBase") or watchedStats[obj] then return end
     local isNumeric=obj:IsA("NumberValue") or obj:IsA("IntValue")
     local named=contains(obj.Name,{
-        "stamina","sprint","energy","resist","endurance","folego","fÃ´lego",
+        "stamina","sprint","energy","resist","endurance","folego","fôlego",
         "role","entity","monster","enemy","team","class","type","flash"
     })
     if not isNumeric and not named then return end
@@ -1389,7 +1423,7 @@ end
 local function discoverExistingEntities()
     if entityDiscoveryDone then return end
     entityDiscoveryDone=true
-    -- Percorre apenas contÃªineres e Models: nÃ£o inspeciona cada peÃ§a/objeto do mapa.
+    -- Percorre apenas contêineres e Models: não inspeciona cada peça/objeto do mapa.
     local visited=0
     local lastYield=0
     local function walk(container,depth)
@@ -1423,8 +1457,8 @@ Workspace.DescendantAdded:Connect(function(obj)
 
     if obj:IsA("Tool") then watchTool(obj) end
 
-    -- Sem depender do nome: objetos que surgem logo apÃ³s ativar uma ferramenta
-    -- sÃ£o candidatos a projÃ©til/artefato lanÃ§ado. Limite evita capturar o mapa inteiro.
+    -- Sem depender do nome: objetos que surgem logo após ativar uma ferramenta
+    -- são candidatos a projétil/artefato lançado. Limite evita capturar o mapa inteiro.
     if states.DataCollector and os.clock()<=recentToolUseUntil
         and recentToolSpawnCount<24
         and (obj:IsA("Model") or obj:IsA("BasePart")) then
@@ -1434,14 +1468,14 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- RELATÃ“RIO MANUAL INTEGRAL
+-- RELATÓRIO MANUAL INTEGRAL
 --==============================================================
 
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V26 - RELATORIO",
-        "Monitoramento de personagem/funÃ§Ã£o e eventos replicados",
+        "ROUBE OU MORRA V27 - RELATORIO",
+        "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
@@ -1488,11 +1522,11 @@ local function copyFullReport()
     if showPage then showPage("Dados") end
 
     if statusLabel then
-        statusLabel.Text = "Gerando relatÃ³rio completo..."
+        statusLabel.Text = "Gerando relatório completo..."
     end
 
     task.spawn(function()
-        -- Se ainda nÃ£o existe nenhum registro, faz uma coleta manual.
+        -- Se ainda não existe nenhum registro, faz uma coleta manual.
         if #records==0 then
             scanGame()
         end
@@ -1518,20 +1552,20 @@ local function copyFullReport()
             if ok then
                 if statusLabel then
                     statusLabel.Text =
-                        "RelatÃ³rio copiado! "
+                        "Relatório copiado! "
                         ..#full.." caracteres | "
                         ..#records.." registros"
                 end
             else
                 if statusLabel then
                     statusLabel.Text =
-                        "RelatÃ³rio exibido abaixo. Clipboard: "..tostring(err)
+                        "Relatório exibido abaixo. Clipboard: "..tostring(err)
                 end
             end
         else
             if statusLabel then
                 statusLabel.Text =
-                    "RelatÃ³rio exibido abaixo. Selecione o texto para copiar."
+                    "Relatório exibido abaixo. Selecione o texto para copiar."
             end
         end
     end)
@@ -1568,13 +1602,14 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V26
+-- ANTI-FLASH V27
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
     return contains(obj.Name,{
-        "flash","blind","flashbang","clarÃ£o",
-        "stunflash","whiteout","flash_effect","blindness"
+        "flash","blind","flashbang","clarão",
+        "stunflash","whiteout","flash_effect","blindness",
+        "flashblur","flashburn"
     })
 end
 
@@ -1606,8 +1641,8 @@ local function inspectFlashObject(obj)
 
         flashEffect = effectLooksLikeFlash(obj)
 
-        -- Efeitos com nome genÃ©rico sÃ³ sÃ£o considerados flash durante a janela
-        -- curta apÃ³s ativaÃ§Ã£o de ferramenta; brilho alto sozinho nÃ£o Ã© evidÃªncia.
+        -- Efeitos com nome genérico só são considerados flash durante a janela
+        -- curta após ativação de ferramenta; brilho alto sozinho não é evidência.
         if not flashEffect and obj:IsA("ColorCorrectionEffect")
             and os.clock()<=recentToolUseUntil then
             pcall(function()
@@ -1745,15 +1780,24 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V26: DIAGNÃ“STICO DIRECIONADO E ALTERAÃ‡ÃƒO LOCAL LIMITADA
+-- STAMINA V27: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
 --==============================================================
 
 local staminaOriginals = {}
 local function isStaminaName(name)
     return contains(name,{
         "stamina","sprint","energy","energia",
-        "resist","endurance","folego","fÃ´lego"
+        "resist","endurance","folego","fôlego"
     })
+end
+
+local function isWritableStaminaValue(name)
+    local normalized=string.lower(tostring(name or "")):gsub("[%s_%-]","")
+    -- Não confundir UpgradeStamina/UpgradeSprint com a barra atual.
+    return normalized=="stamina" or normalized=="currentstamina"
+        or normalized=="staminacurrent" or normalized=="staminavalue"
+        or normalized=="sprintstamina" or normalized=="currentenergy"
+        or normalized=="energycurrent" or normalized=="energyvalue"
 end
 
 local function findStaminaObjects()
@@ -1768,7 +1812,11 @@ local function findStaminaObjects()
 
     local seen={}
     for _,root in ipairs(searchRoots) do
-        for _,obj in ipairs(root:GetDescendants()) do
+        local objects={root}
+        for _,descendant in ipairs(root:GetDescendants()) do
+            table.insert(objects,descendant)
+        end
+        for _,obj in ipairs(objects) do
             local candidate=isStaminaName(obj.Name)
             if not candidate then
                 for key in pairs(obj:GetAttributes()) do
@@ -1778,9 +1826,10 @@ local function findStaminaObjects()
             if candidate and not seen[obj] then
                 seen[obj]=true
                 table.insert(found,obj)
-                -- SÃ³ altera NumberValue/IntValue explicitamente identificados.
-                -- NÃ£o faz require() nem modifica upvalues de mÃ³dulos desconhecidos.
-                if states.InfiniteStamina
+                -- Só altera valores locais com nome de stamina ATUAL conhecido.
+                -- UpgradeStamina/UpgradeSprint são níveis, não a barra de energia.
+                -- Não faz require() nem modifica upvalues de módulos desconhecidos.
+                if states.InfiniteStamina and isWritableStaminaValue(obj.Name)
                     and (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
                     if staminaOriginals[obj]==nil then staminaOriginals[obj]=obj.Value end
                     pcall(function() obj.Value=999999 end)
@@ -1874,7 +1923,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV26"
+gui.Name = "RoubeOuMorraV27"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1892,6 +1941,7 @@ stroke.Color = Color3.fromRGB(125,20,30)
 stroke.Thickness = 1.5
 
 local header = Instance.new("Frame")
+header.Name = "Header"
 header.Size = UDim2.new(1,0,0,48)
 header.BackgroundColor3 = Color3.fromRGB(105,15,25)
 header.BorderSizePixel = 0
@@ -1902,7 +1952,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V26  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V27  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -1910,9 +1960,10 @@ title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = header
 
 local minimize = Instance.new("TextButton")
+minimize.Name = "Minimize"
 minimize.Size = UDim2.fromOffset(38,34)
 minimize.Position = UDim2.new(1,-44,0,7)
-minimize.Text = "â€”"
+minimize.Text = "-"
 minimize.TextSize = 22
 minimize.Font = Enum.Font.GothamBold
 minimize.TextColor3 = Color3.new(1,1,1)
@@ -1921,6 +1972,7 @@ minimize.Parent = header
 Instance.new("UICorner",minimize).CornerRadius = UDim.new(0,7)
 
 local restore = Instance.new("TextButton")
+restore.Name = "Restore"
 restore.Size = UDim2.fromOffset(38,38)
 restore.Position = UDim2.new(0,16,0.5,-19)
 restore.Text = "R"
@@ -2069,7 +2121,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V26] "..name..": "..tostring(err))
+                warn("[V27] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -2099,16 +2151,16 @@ local pESP = makePage("ESP")
 local pEnv = makePage("Ambiente")
 local pCollect = makePage("Coleta")
 local pData = makePage("Dados")
-local pConfig = makePage("ConfiguraÃ§Ãµes")
+local pConfig = makePage("Configurações")
 
 for _,name in ipairs({
-    "Principal","ESP","Ambiente","Coleta","Dados","ConfiguraÃ§Ãµes"
+    "Principal","ESP","Ambiente","Coleta","Dados","Configurações"
 }) do
     addNav(name)
 end
 
 -- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V26 | Feito por Tales")
+addSection(pMain,"ROUBE OU MORRA V27 | Feito por Tales")
 addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
 addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
 
@@ -2135,17 +2187,17 @@ addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 
 -- COLETA
 addSection(pCollect,"COLETA")
-addToggle(pCollect,"Coleta InstantÃ¢nea","InstantCollection",setInstant)
+addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Stamina Infinita (experimental - apenas valores locais identificados)","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Stamina Infinita (experimental - depende de valor local acessível)","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
-addSection(pData,"COLETOR AUTOMÃTICO DA PARTIDA")
-addButton(pData,"V26: estamina, entidades, ferramentas, projÃ©teis e clarÃµes",function()
-    statusLabel.Text = "Cliente: coleta somente dados replicados/visÃ­veis; valores do servidor nÃ£o sÃ£o acessÃ­veis."
+addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
+addButton(pData,"V27: estamina, entidades, ferramentas, projéteis e clarões",function()
+    statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
-addToggle(pData,"Coletor automÃ¡tico durante a partida","DataCollector",function(enabled)
+addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
     if enabled then
         statusLabel.Text = "Iniciando coleta direcionada..."
         watchFlashRoot(Lighting)
@@ -2164,7 +2216,7 @@ addToggle(pData,"Coletor automÃ¡tico durante a partida","DataCollector",functi
             .." | Pendentes: "..#sendQueue
         flushReports()
     else
-        statusLabel.Text = "Coleta automÃ¡tica pausada"
+        statusLabel.Text = "Coleta automática pausada"
     end
 end)
 
@@ -2215,7 +2267,7 @@ reportBox = Instance.new("TextBox")
 reportBox.Size = UDim2.new(1,-6,0,210)
 reportBox.BackgroundColor3 = Color3.fromRGB(10,10,13)
 reportBox.TextColor3 = Color3.new(1,1,1)
-reportBox.PlaceholderText = "O relatÃ³rio completo aparecerÃ¡ aqui..."
+reportBox.PlaceholderText = "O relatório completo aparecerá aqui..."
 reportBox.Text = ""
 reportBox.TextSize = 10
 reportBox.TextWrapped = false
@@ -2227,7 +2279,7 @@ reportBox.TextEditable = true
 reportBox.Parent = pData
 Instance.new("UICorner",reportBox).CornerRadius = UDim.new(0,6)
 
-addButton(pData,"GERAR E COPIAR RELATÃ“RIO INTEIRO",copyFullReport)
+addButton(pData,"GERAR E COPIAR RELATÓRIO INTEIRO",copyFullReport)
 
 addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     statusLabel.Text = "Atualizando dados..."
@@ -2235,12 +2287,12 @@ addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     flushReports()
 
     statusLabel.Text =
-        "Varredura concluÃ­da | Novos: "..a
+        "Varredura concluída | Novos: "..a
         .." | Registros: "..#records
         .." | Pendentes: "..#sendQueue
 end)
 
-addButton(pData,"LIMPAR RELATÃ“RIO LOCAL",function()
+addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
     table.clear(records)
     table.clear(recordIndex)
     table.clear(sentKeys)
@@ -2253,17 +2305,17 @@ addButton(pData,"LIMPAR RELATÃ“RIO LOCAL",function()
     lastDataScan = 0
 
     reportBox.Text = ""
-    statusLabel.Text = "RelatÃ³rio local limpo"
+    statusLabel.Text = "Relatório local limpo"
 end)
 
--- CONFIGURAÃ‡Ã•ES
-addSection(pConfig,"DIAGNÃ“STICO E CONFIGURAÃ‡Ã•ES")
+-- CONFIGURAÇÕES
+addSection(pConfig,"DIAGNÓSTICO E CONFIGURAÇÕES")
 
 addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÃ“STICO DE STAMINA V26",
+        "DIAGNÓSTICO DE STAMINA V27",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -2276,6 +2328,12 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
 
     for _,obj in ipairs(found) do
         table.insert(lines,obj:GetFullName().." ["..obj.ClassName.."]")
+        local attrs=obj:GetAttributes()
+        for _,key in ipairs({"UpgradeStamina","UpgradeSprint","Skills","Stamina","CurrentStamina","SprintStamina","Energy"}) do
+            if attrs[key]~=nil then
+                table.insert(lines,"  "..key.." = "..tostring(attrs[key]))
+            end
+        end
     end
 
     if #found==0 then
@@ -2283,7 +2341,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     end
 
     reportBox.Text = table.concat(lines,"\n")
-    statusLabel.Text = "DiagnÃ³stico de stamina concluÃ­do"
+    statusLabel.Text = "Diagnóstico de stamina concluído"
     showPage("Dados")
 end)
 
@@ -2298,6 +2356,37 @@ end)
 addButton(pConfig,"FECHAR PAINEL",function()
     gui:Destroy()
 end)
+
+-- Padronização tipográfica: evita mistura de fontes, RichText inesperado e cortes
+-- inconsistentes nos rótulos/controles, inclusive no botão de minimizar.
+for _,uiObject in ipairs(gui:GetDescendants()) do
+    if uiObject:IsA("TextLabel") or uiObject:IsA("TextButton") or uiObject:IsA("TextBox") then
+        pcall(function()
+            uiObject.RichText = false
+            uiObject.TextScaled = false
+            if uiObject:IsA("TextBox") and uiObject==reportBox then
+                uiObject.Font = Enum.Font.Code
+                uiObject.TextWrapped = true
+                uiObject.TextYAlignment = Enum.TextYAlignment.Top
+            else
+                if uiObject.Name=="TextLabel" and uiObject.Parent and uiObject.Parent.Name=="Header" then
+                    uiObject.Font = Enum.Font.GothamBold
+                elseif uiObject:IsA("TextButton") and (uiObject.Parent==sidebar or uiObject.Name=="Minimize" or uiObject.Name=="Restore") then
+                    uiObject.Font = Enum.Font.GothamBold
+                else
+                    uiObject.Font = Enum.Font.Gotham
+                end
+                if uiObject:IsA("TextButton") then
+                    uiObject.TextWrapped = false
+                    uiObject.TextTruncate = Enum.TextTruncate.AtEnd
+                elseif uiObject:IsA("TextLabel") then
+                    uiObject.TextWrapped = false
+                    uiObject.TextTruncate = Enum.TextTruncate.AtEnd
+                end
+            end
+        end)
+    end
+end
 
 showPage("Principal")
 
@@ -2352,7 +2441,7 @@ restore.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- ATUALIZAÃ‡ÃƒO OTIMIZADA
+-- ATUALIZAÇÃO OTIMIZADA
 --==============================================================
 
 task.spawn(function()
@@ -2362,8 +2451,8 @@ task.spawn(function()
     while gui and gui.Parent do
         local now = os.clock()
 
-        -- ESP Ã© atualizado por ativaÃ§Ã£o, troca de personagem e novos objetos.
-        -- NÃ£o existe mais varredura periÃ³dica do mapa inteiro.
+        -- ESP é atualizado por ativação, troca de personagem e novos objetos.
+        -- Não existe mais varredura periódica do mapa inteiro.
 
         if states.RemoveDoors and now-lastDoor>=1.0 then
             refreshDoorCollision()
@@ -2375,7 +2464,7 @@ task.spawn(function()
             lastStamina = now
         end
 
-        -- Anti-Flash Ã© orientado a eventos: evita varrer toda a interface a cada 0,5s.
+        -- Anti-Flash é orientado a eventos: evita varrer toda a interface a cada 0,5s.
 
         if states.DataCollector and now-lastDataScan>=30 then
             local a = scanGame()
