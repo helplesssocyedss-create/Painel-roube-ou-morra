@@ -1,5 +1,5 @@
 --==============================================================
--- ROUBE OU MORRA V23 | Feito por Tales
+-- ROUBE OU MORRA V24 | Feito por Tales
 -- ESP corrigido | Anti-Flash reforçado | Relatório integral
 -- Coleta Supabase | Otimização mobile
 --==============================================================
@@ -14,7 +14,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV23"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV24"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -51,10 +51,10 @@ local monsterNames = {
 }
 
 local highlights,labels = {},{}
-local espFolder = Workspace:FindFirstChild("TalesESP_V23_Folder")
+local espFolder = Workspace:FindFirstChild("TalesESP_V24_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V23_Folder"
+    espFolder.Name = "TalesESP_V24_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -111,13 +111,13 @@ end
 
 local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
-    if getPlayerFromModel(model) then return false end
+
+    -- Nome/tags/atributos explícitos continuam valendo para NPCs e personagens.
     if contains(model.Name,monsterNames) then return true end
 
     local ok,tags = pcall(function()
         return CollectionService:GetTags(model)
     end)
-
     if ok then
         for _,tag in ipairs(tags) do
             if contains(tag,{"monster","enemy","monstro","inimigo","creature"}) then
@@ -126,15 +126,42 @@ local function isMonster(model)
         end
     end
 
-    for _,key in ipairs({
-        "IsMonster","Monster","IsEnemy","Enemy",
-        "EntityType","NPCType","Role","CharacterType","MonsterName"
-    }) do
-        local value = model:GetAttribute(key)
-        if value==true then return true end
-        if type(value)=="string" and contains(value,{
-            "monster","monstro","enemy","inimigo","creature"
-        }) then return true end
+    local markerKeys = {
+        "IsMonster","Monster","IsEnemy","Enemy","EntityType","NPCType",
+        "Role","CharacterType","MonsterName","TeamRole","Class","CharacterClass"
+    }
+    local containers = {model}
+    local owner = getPlayerFromModel(model)
+    if owner then
+        table.insert(containers,owner)
+    end
+
+    for _,container in ipairs(containers) do
+        for _,key in ipairs(markerKeys) do
+            local value = container:GetAttribute(key)
+            if value == true then return true end
+            if type(value)=="string" and contains(value,{
+                "monster","monstro","enemy","inimigo","creature"
+            }) then
+                return true
+            end
+        end
+    end
+
+    -- Alguns jogos replicam a função em BoolValue/StringValue dentro do personagem.
+    for _,obj in ipairs(model:GetDescendants()) do
+        if obj:IsA("BoolValue") and obj.Value then
+            if contains(obj.Name,{"monster","monstro","enemy","inimigo"}) then
+                return true
+            end
+        elseif (obj:IsA("StringValue") or obj:IsA("ObjectValue"))
+            and contains(obj.Name,{"role","class","type","monster","monstro"}) then
+            if obj:IsA("StringValue") and contains(obj.Value,{
+                "monster","monstro","enemy","inimigo","creature"
+            }) then
+                return true
+            end
+        end
     end
 
     return false
@@ -180,7 +207,7 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V23"
+        h.Name = "TalesESP_V24"
         h.Adornee = obj
         h.FillTransparency = 0.88
         h.OutlineTransparency = 0
@@ -211,10 +238,10 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V23"
+        bill.Name = "TalesESPLabel_V24"
         bill.AlwaysOnTop = true
-        bill.Size = small and UDim2.fromOffset(145,21)
-            or UDim2.fromOffset(118,18)
+        bill.Size = small and UDim2.fromOffset(118,18)
+            or UDim2.fromOffset(104,16)
         bill.StudsOffset = Vector3.new(0,3,0)
 
         local txt = Instance.new("TextLabel")
@@ -222,7 +249,7 @@ local function createESP(obj,color,textValue,small)
         txt.Size = UDim2.fromScale(1,1)
         txt.BackgroundTransparency = 1
         txt.TextScaled = false
-        txt.TextSize = small and 12 or 11
+        txt.TextSize = small and 10 or 10
         txt.TextTruncate = Enum.TextTruncate.AtEnd
         txt.Font = Enum.Font.GothamBold
         txt.TextStrokeTransparency = 0.2
@@ -574,15 +601,32 @@ end
 -- SUPABASE
 --==============================================================
 
+local function reportFingerprint(entry)
+    local ok,encoded = pcall(function()
+        return HttpService:JSONEncode(entry)
+    end)
+    if not ok then encoded = tostring(entry) end
+
+    local hash = 7
+    for i=1,#encoded do
+        hash = (hash*31 + string.byte(encoded,i)) % 2147483647
+    end
+    return tostring(hash)
+end
+
 local function queueReport(entry,key)
     if not states.DataCollector then return end
-    if sentKeys[key] or queuedKeys[key] then return end
+
+    -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
+    -- uma chave própria, em vez de bloquear para sempre pelo caminho.
+    local versionedKey = tostring(key).."|"..reportFingerprint(entry)
+    if sentKeys[versionedKey] or queuedKeys[versionedKey] then return end
 
     table.insert(sendQueue,{
-        record_key=key,
+        record_key=versionedKey,
         payload=entry
     })
-    queuedKeys[key] = true
+    queuedKeys[versionedKey] = true
 end
 
 local function sendOne(item)
@@ -768,9 +812,258 @@ local function scanGame()
         if index%150==0 then task.wait() end
     end
 
+    -- Contexto do jogador e do personagem local: função/monstro e atributos
+    -- que estejam efetivamente replicados para este cliente.
+    local function addPlayerSnapshot(plr)
+        local char = plr.Character
+        local data = {
+            Event="PlayerSnapshot",
+            PlayerName=plr.Name,
+            UserId=plr.UserId,
+            Team=plr.Team and plr.Team.Name or "",
+            Character=char and char.Name or "",
+            IsLocalPlayer=(plr==player),
+            IsMonster=char and isMonster(char) or false,
+            CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }
+        local attrs = {}
+        for k,val in pairs(plr:GetAttributes()) do attrs[k]=tostring(val) end
+        if char then
+            data.CharacterClass=char.ClassName
+            data.CharacterAttributes={}
+            for k,val in pairs(char:GetAttributes()) do
+                data.CharacterAttributes[k]=tostring(val)
+            end
+            local hum=char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                data.Health=hum.Health
+                data.MaxHealth=hum.MaxHealth
+            end
+        end
+        data.PlayerAttributes=attrs
+        local key="PlayerSnapshot|"..tostring(plr.UserId)
+        local idx=recordIndex[key]
+        if idx then records[idx]=data
+        elseif #records<MAX_RECORDS then
+            table.insert(records,data)
+            recordIndex[key]=#records
+            added+=1
+        end
+        queueReport(data,key)
+    end
+
+    for _,plr in ipairs(Players:GetPlayers()) do
+        pcall(addPlayerSnapshot,plr)
+    end
+
     lastDataScan = os.clock()
     return added,updated
 end
+
+--==============================================================
+-- V24: MONITORAMENTO DE PERSONAGENS, FUNÇÕES E EVENTOS
+--==============================================================
+
+local watchedPlayers = setmetatable({}, {__mode="k"})
+local watchedCharacters = setmetatable({}, {__mode="k"})
+local watchedTools = setmetatable({}, {__mode="k"})
+local eventSequence = 0
+
+local function safePath(obj)
+    local ok,path=pcall(function() return obj:GetFullName() end)
+    return ok and path or (obj and obj.Name or "unknown")
+end
+
+local function makeObjectReport(obj,eventName)
+    if not obj then return end
+    local entry = {
+        Event=eventName or "ObjectObserved",
+        Name=obj.Name,
+        Class=obj.ClassName,
+        Path=safePath(obj),
+        CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        Attributes={}
+    }
+    pcall(function()
+        for k,val in pairs(obj:GetAttributes()) do
+            entry.Attributes[k]=tostring(val)
+        end
+    end)
+    if obj:IsA("Tool") then
+        entry.ToolTip=obj.ToolTip
+        entry.RequiresHandle=obj.RequiresHandle
+    elseif obj:IsA("Explosion") then
+        entry.Position=tostring(obj.Position)
+        entry.BlastRadius=obj.BlastRadius
+        entry.BlastPressure=obj.BlastPressure
+    elseif obj:IsA("ValueBase") then
+        pcall(function() entry.Value=tostring(obj.Value) end)
+    end
+    eventSequence+=1
+    local key="Event|"..tostring(eventSequence).."|"..entry.Event.."|"..entry.Path
+    queueReport(entry,key)
+end
+
+local function roleSnapshot(plr,reason)
+    if not plr then return end
+    local char=plr.Character
+    local roleData={
+        Event="RoleOrCharacterChanged",
+        Reason=reason or "Update",
+        PlayerName=plr.Name,
+        UserId=plr.UserId,
+        Team=plr.Team and plr.Team.Name or "",
+        CharacterName=char and char.Name or "",
+        IsLocalPlayer=(plr==player),
+        IsMonster=char and isMonster(char) or false,
+        CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        PlayerAttributes={},
+        CharacterAttributes={}
+    }
+    for k,val in pairs(plr:GetAttributes()) do
+        roleData.PlayerAttributes[k]=tostring(val)
+    end
+    if char then
+        for k,val in pairs(char:GetAttributes()) do
+            roleData.CharacterAttributes[k]=tostring(val)
+        end
+        local markers={}
+        for _,obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("StringValue") or obj:IsA("BoolValue") then
+                if contains(obj.Name,{"role","class","type","monster","monstro","team"}) then
+                    local ok,value=pcall(function() return obj.Value end)
+                    if ok then markers[obj.Name]=tostring(value) end
+                end
+            end
+        end
+        roleData.RoleValues=markers
+    end
+    local key="RoleState|"..tostring(plr.UserId)
+    local idx=recordIndex[key]
+    if idx then records[idx]=roleData
+    elseif #records<MAX_RECORDS then
+        table.insert(records,roleData)
+        recordIndex[key]=#records
+    end
+    queueReport(roleData,key)
+    if states.ESPMonsters then task.defer(refreshESP) end
+    if states.DataCollector then task.defer(flushReports) end
+end
+
+local function watchTool(tool)
+    if not tool or not tool:IsA("Tool") or watchedTools[tool] then return end
+    watchedTools[tool]=true
+    if contains(tool.Name,{"grenade","flash","bomb","explosive","granada"}) then
+        makeObjectReport(tool,"GrenadeOrExplosiveToolDetected")
+    end
+    tool.Equipped:Connect(function()
+        makeObjectReport(tool,"ToolEquipped")
+        if states.DataCollector then flushReports() end
+    end)
+    tool.Unequipped:Connect(function()
+        makeObjectReport(tool,"ToolUnequipped")
+        if states.DataCollector then flushReports() end
+    end)
+    tool.Activated:Connect(function()
+        makeObjectReport(tool,"ToolActivated")
+        if states.DataCollector then flushReports() end
+    end)
+end
+
+local function watchCharacter(char,plr)
+    if not char or watchedCharacters[char] then return end
+    watchedCharacters[char]=true
+    roleSnapshot(plr,"CharacterAttached")
+
+    char.AttributeChanged:Connect(function(attributeName)
+        roleSnapshot(plr,"CharacterAttributeChanged:"..tostring(attributeName))
+    end)
+    char.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Tool") then watchTool(obj) end
+        if obj:IsA("ValueBase") and contains(obj.Name,{
+            "stamina","energy","resist","endurance","folego","fôlego"
+        }) then
+            makeObjectReport(obj,"StaminaOrResistanceAdded")
+            obj.Changed:Connect(function()
+                makeObjectReport(obj,"StaminaOrResistanceChanged")
+                if states.DataCollector then flushReports() end
+            end)
+        elseif obj:IsA("ValueBase") then
+            makeObjectReport(obj,"CharacterValueAdded")
+        end
+        if obj:IsA("Model") or obj:IsA("Humanoid") then
+            roleSnapshot(plr,"CharacterDescendantAdded:"..obj.Name)
+        end
+    end)
+    for _,obj in ipairs(char:GetDescendants()) do
+        if obj:IsA("Tool") then watchTool(obj) end
+        if obj:IsA("ValueBase") and contains(obj.Name,{
+            "stamina","energy","resist","endurance","folego","fôlego"
+        }) then
+            makeObjectReport(obj,"StaminaOrResistanceFound")
+            obj.Changed:Connect(function()
+                makeObjectReport(obj,"StaminaOrResistanceChanged")
+                if states.DataCollector then flushReports() end
+            end)
+        end
+    end
+end
+
+local function watchPlayer(plr)
+    if not plr or watchedPlayers[plr] then return end
+    watchedPlayers[plr]=true
+    plr.CharacterAdded:Connect(function(char)
+        watchCharacter(char,plr)
+        roleSnapshot(plr,"CharacterAdded")
+        if states.DataCollector then flushReports() end
+    end)
+    plr:GetPropertyChangedSignal("Team"):Connect(function()
+        roleSnapshot(plr,"TeamChanged")
+    end)
+    plr.AttributeChanged:Connect(function(attributeName)
+        roleSnapshot(plr,"PlayerAttributeChanged:"..tostring(attributeName))
+    end)
+    plr.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Tool") then watchTool(obj) end
+        if obj:IsA("ValueBase") and contains(obj.Name,{
+            "stamina","energy","resist","endurance","folego","fôlego"
+        }) then
+            makeObjectReport(obj,"PlayerStatAdded")
+            obj.Changed:Connect(function()
+                makeObjectReport(obj,"PlayerStatChanged")
+                if states.DataCollector then flushReports() end
+            end)
+        end
+    end)
+    if plr.Character then watchCharacter(plr.Character,plr) end
+    for _,obj in ipairs(plr:GetChildren()) do
+        if obj:IsA("Tool") then watchTool(obj) end
+    end
+    roleSnapshot(plr,"PlayerObserved")
+end
+
+for _,plr in ipairs(Players:GetPlayers()) do watchPlayer(plr) end
+Players.PlayerAdded:Connect(watchPlayer)
+Players.PlayerRemoving:Connect(function(plr)
+    if states.DataCollector then
+        local entry={Event="PlayerRemoving",PlayerName=plr.Name,UserId=plr.UserId}
+        eventSequence+=1
+        queueReport(entry,"PlayerRemoving|"..tostring(eventSequence))
+        task.defer(flushReports)
+    end
+end)
+
+Workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Explosion") then
+        makeObjectReport(obj,"ExplosionCreated")
+        if states.DataCollector then task.defer(flushReports) end
+    elseif obj:IsA("Tool") then
+        watchTool(obj)
+    elseif contains(obj.Name,{"grenade","flashbang","flash_bang","explosion","granada"}) then
+        makeObjectReport(obj,"GrenadeOrFlashObjectCreated")
+        if states.DataCollector then task.defer(flushReports) end
+    end
+end)
 
 --==============================================================
 -- RELATÓRIO MANUAL INTEGRAL
@@ -779,7 +1072,8 @@ end
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V23 - RELATORIO",
+        "ROUBE OU MORRA V24 - RELATORIO",
+        "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
@@ -906,7 +1200,7 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V23
+-- ANTI-FLASH V24
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
@@ -1106,15 +1400,23 @@ end
 local function findStaminaObjects()
     local found = {}
 
-    for _,obj in ipairs(player:GetDescendants()) do
-        if isStaminaName(obj.Name) then
-            table.insert(found,obj)
+    local searchRoots = {player}
+    if player.Character then table.insert(searchRoots,player.Character) end
+    table.insert(searchRoots,PlayerGui)
 
-            if obj:IsA("NumberValue") or obj:IsA("IntValue") then
-                if staminaOriginals[obj]==nil then
-                    staminaOriginals[obj]=obj.Value
+    local seenStats = {}
+    for _,root in ipairs(searchRoots) do
+        for _,obj in ipairs(root:GetDescendants()) do
+            if isStaminaName(obj.Name) and not seenStats[obj] then
+                seenStats[obj]=true
+                table.insert(found,obj)
+
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                    if staminaOriginals[obj]==nil then
+                        staminaOriginals[obj]=obj.Value
+                    end
+                    pcall(function() obj.Value=999999 end)
                 end
-                pcall(function() obj.Value=999999 end)
             end
         end
     end
@@ -1221,7 +1523,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV23"
+gui.Name = "RoubeOuMorraV24"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1249,7 +1551,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V23  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V24  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -1416,7 +1718,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V23] "..name..": "..tostring(err))
+                warn("[V24] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -1455,7 +1757,7 @@ for _,name in ipairs({
 end
 
 -- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V23")
+addSection(pMain,"ROUBE OU MORRA V24 | Feito por Tales")
 addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
 addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
 
@@ -1488,6 +1790,9 @@ addToggle(pCollect,"Stamina Infinita (experimental - depende do jogo)","Infinite
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
+addButton(pData,"V24: monitorar personagem, função, ferramentas e explosões",function()
+    statusLabel.Text = "Cliente: coleta apenas objetos e atributos replicados/visíveis."
+end)
 
 addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
     if enabled then
@@ -1598,7 +1903,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V23",
+        "DIAGNÓSTICO DE STAMINA V24",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -1694,11 +1999,12 @@ task.spawn(function()
     local lastESP = 0
     local lastDoor = 0
     local lastStamina = 0
+    local lastAntiFlash = 0
 
     while gui and gui.Parent do
         local now = os.clock()
 
-        if now-lastESP>=5 then
+        if now-lastESP>=2 then
             local anyESP = states.ESPPlayers
                 or states.ESPMonsters
                 or states.ESPDucts
@@ -1719,6 +2025,18 @@ task.spawn(function()
         if states.InfiniteStamina and now-lastStamina>=10 then
             findStaminaObjects()
             lastStamina = now
+        end
+
+        -- Alguns efeitos de clarão são criados antes de o observador ser ligado
+        -- ou alteram propriedades depois; reinspeciona os pontos visíveis.
+        if states.AntiFlash and now-lastAntiFlash>=0.5 then
+            pcall(function()
+                inspectFlashRoot(Lighting)
+                inspectFlashRoot(PlayerGui)
+                inspectFlashRoot(player.Character)
+                inspectFlashRoot(Workspace.CurrentCamera)
+            end)
+            lastAntiFlash=now
         end
 
         if states.DataCollector and now-lastDataScan>=45 then
