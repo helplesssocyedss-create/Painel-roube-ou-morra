@@ -1,7 +1,7 @@
 --==============================================================
--- ROUBE OU MORRA V28 | Feito por Tales
+-- ROUBE OU MORRA V29 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Proteção contra falsos positivos visuais | Coleta otimizada
+-- Anti-Flash direcionado | Diagnóstico da StaminaHUD | Coleta seletiva
 -- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
 
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -56,10 +56,12 @@ local previousESPFolder = Workspace:FindFirstChild("TalesESP_V26_Folder")
 if previousESPFolder then previousESPFolder:Destroy() end
 local previousV27ESPFolder = Workspace:FindFirstChild("TalesESP_V27_Folder")
 if previousV27ESPFolder then previousV27ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
+local previousV28ESPFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
+if previousV28ESPFolder then previousV28ESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V29_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V28_Folder"
+    espFolder.Name = "TalesESP_V29_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -67,6 +69,7 @@ local savedEffects,savedOverlays = {},{}
 local savedLighting = {}
 local watchedFlashRoots = setmetatable({}, {__mode="k"})
 local reportedFlashObjects = setmetatable({}, {__mode="k"})
+local watchedFlashObjects = setmetatable({}, {__mode="k"})
 local recentToolUseUntil = 0
 local recentToolSpawnCount = 0
 local lastActivatedToolName = ""
@@ -296,7 +299,7 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V28"
+        h.Name = "TalesESP_V29"
         h.Adornee = obj
         h.FillTransparency = 1
         h.OutlineTransparency = 0
@@ -327,7 +330,7 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V28"
+        bill.Name = "TalesESPLabel_V29"
         bill.AlwaysOnTop = true
         bill.Size = small and UDim2.fromOffset(118,18)
             or UDim2.fromOffset(104,16)
@@ -1098,7 +1101,7 @@ local function scanGame()
 end
 
 --==============================================================
--- V28: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
+-- V29: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
 --==============================================================
 
 local watchedPlayers = setmetatable({}, {__mode="k"})
@@ -1217,7 +1220,15 @@ local function staminaSnapshot(reason)
         if now-lastHudSample>=1.5 then
             lastHudSample=now
             local changed=0
-            for _,obj in ipairs(PlayerGui:GetDescendants()) do
+            local staminaHud=PlayerGui:FindFirstChild("StaminaHUD")
+            local hudObjects={}
+            if staminaHud then
+                table.insert(hudObjects,staminaHud)
+                for _,descendant in ipairs(staminaHud:GetDescendants()) do
+                    table.insert(hudObjects,descendant)
+                end
+            end
+            for _,obj in ipairs(hudObjects) do
                 local candidate=obj:IsA("Frame") or obj:IsA("ImageLabel")
                     or (obj:IsA("TextLabel") and tonumber(obj.Text)~=nil)
                 if candidate then
@@ -1568,7 +1579,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V28 - RELATORIO",
+        "ROUBE OU MORRA V29 - RELATORIO",
         "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -1696,11 +1707,14 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V28
+-- ANTI-FLASH V29 | EFEITOS E OVERLAY CONHECIDOS
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
-    return contains(obj.Name,{
+    if not obj then return false end
+    local name=string.lower(tostring(obj.Name or ""))
+    if name=="flashblur" or name=="flashburn" then return true end
+    return contains(name,{
         "flash","blind","flashbang","clarão",
         "stunflash","whiteout","flash_effect","blindness",
         "flashblur","flashburn"
@@ -1708,101 +1722,83 @@ local function effectLooksLikeFlash(obj)
 end
 
 local function isInsideShop(obj)
-    local current = obj
-
+    local current=obj
     for _=1,10 do
         if not current then break end
-        if contains(current.Name,{"shop","store","loja","market"}) then
-            return true
-        end
-        current = current.Parent
+        if contains(current.Name,{"shop","store","loja","market"}) then return true end
+        current=current.Parent
     end
-
     return false
 end
 
-local function inspectFlashObject(obj)
-    if (not states.AntiFlash and not states.DataCollector)
-        or not obj or isInsideShop(obj) then
-        return
+local function isKnownRarityFlashOverlay(obj)
+    if not obj or not (obj:IsA("Frame") or obj:IsA("ImageLabel")) then return false end
+    local ok,path=pcall(function() return obj:GetFullName() end)
+    if not ok then return false end
+    local suffix="PlayerGui.RarityBoard.Frame.Frame"
+    if string.sub(path,-#suffix)~=suffix then return false end
+    local camera=Workspace.CurrentCamera
+    local screen=camera and camera.ViewportSize or Vector2.new(0,0)
+    local size=obj.AbsoluteSize
+    if screen.X<=0 or screen.Y<=0 or size.X<screen.X*0.88 or size.Y<screen.Y*0.88 then
+        return false
     end
-
-    local flashEffect = false
-
-    if obj:IsA("BlurEffect")
-        or obj:IsA("ColorCorrectionEffect")
-        or obj:IsA("BloomEffect") then
-
-        flashEffect = effectLooksLikeFlash(obj)
-
-        -- Efeitos com nome genérico só são considerados flash durante a janela
-        -- curta após ativação de ferramenta; brilho alto sozinho não é evidência.
-        if not flashEffect and obj:IsA("ColorCorrectionEffect")
-            and os.clock()<=recentToolUseUntil then
-            pcall(function()
-                flashEffect = obj.Brightness>0.65
-                    or obj.Contrast>0.65 or obj.Saturation < -0.75
-            end)
-        end
+    if obj:IsA("Frame") then
+        local c=obj.BackgroundColor3
+        return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.BackgroundTransparency<0.25
     end
+    local c=obj.ImageColor3
+    return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.ImageTransparency<0.25
+end
 
-    local visualClass=obj:IsA("BlurEffect")
-        or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect")
-    local recentVisualCandidate=visualClass and os.clock()<=recentToolUseUntil
-
-    if (flashEffect or recentVisualCandidate) then
-        if states.DataCollector and not reportedFlashObjects[obj] then
-            reportedFlashObjects[obj]=true
-            makeObjectReport(obj,flashEffect and "FlashVisualEffectDetected"
-                or "VisualEffectAfterToolActivation")
-        end
-    end
-
-    if flashEffect then
-        if states.AntiFlash then
-            if savedEffects[obj]==nil then savedEffects[obj] = obj.Enabled end
+local function suppressFlashObject(obj)
+    if not obj or not obj.Parent then return end
+    if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") then
+        if effectLooksLikeFlash(obj) then
+            if savedEffects[obj]==nil then savedEffects[obj]=obj.Enabled end
             pcall(function() obj.Enabled=false end)
         end
+    elseif obj:IsA("Frame") or obj:IsA("ImageLabel") then
+        if isKnownRarityFlashOverlay(obj) then
+            if savedOverlays[obj]==nil then savedOverlays[obj]=obj.Visible end
+            pcall(function() obj.Visible=false end)
+        end
+    end
+end
+
+local function watchFlashObject(obj)
+    if not obj or watchedFlashObjects[obj] then return end
+    local target=effectLooksLikeFlash(obj) or isKnownRarityFlashOverlay(obj)
+    if not target then return end
+    watchedFlashObjects[obj]=true
+    if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") then
+        obj:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if states.AntiFlash and obj.Parent and obj.Enabled then suppressFlashObject(obj) end
+        end)
+    elseif obj:IsA("GuiObject") then
+        obj:GetPropertyChangedSignal("Visible"):Connect(function()
+            if states.AntiFlash and obj.Parent and obj.Visible then suppressFlashObject(obj) end
+        end)
+    end
+end
+
+local function inspectFlashObject(obj)
+    if (not states.AntiFlash and not states.DataCollector) or not obj or isInsideShop(obj) then return end
+    local flashEffect=effectLooksLikeFlash(obj)
+    local knownOverlay=isKnownRarityFlashOverlay(obj)
+    local visualClass=obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect")
+    local recentVisualCandidate=visualClass and os.clock()<=recentToolUseUntil
+
+    if (flashEffect or knownOverlay or recentVisualCandidate) and states.DataCollector
+        and not reportedFlashObjects[obj] then
+        reportedFlashObjects[obj]=true
+        makeObjectReport(obj,knownOverlay and "FullScreenWhiteFlashOverlayDetected"
+            or (flashEffect and "FlashVisualEffectDetected" or "VisualEffectAfterToolActivation"))
     end
 
-    if obj:IsA("Frame") or obj:IsA("ImageLabel") then
-        local size = obj.AbsoluteSize
-        local camera=Workspace.CurrentCamera
-        local screen = camera and camera.ViewportSize or Vector2.new(0,0)
-
-        if screen.X>0 and screen.Y>0
-            and size.X>=screen.X*0.88
-            and size.Y>=screen.Y*0.88 then
-
-            local white = false
-
-            if obj:IsA("Frame") then
-                local c = obj.BackgroundColor3
-                white = c.R>0.88 and c.G>0.88 and c.B>0.88
-                    and obj.BackgroundTransparency<0.25
-            elseif obj:IsA("ImageLabel") then
-                local c=obj.ImageColor3
-                white=c.R>0.88 and c.G>0.88 and c.B>0.88
-                    and obj.ImageTransparency<0.25
-            end
-
-            if white then
-                if states.DataCollector and not reportedFlashObjects[obj] then
-                    reportedFlashObjects[obj]=true
-                    makeObjectReport(obj,"FullScreenWhiteFlashOverlayDetected")
-                end
-                local parent=obj.Parent
-                local grandparent=parent and parent.Parent
-                local knownRarityOverlay=parent and parent.Name=="Frame"
-                    and grandparent and grandparent.Name=="RarityBoard"
-                if states.AntiFlash and (effectLooksLikeFlash(obj)
-                    or os.clock()<=recentToolUseUntil
-                    or (states.AssistantA and knownRarityOverlay)) then
-                    if savedOverlays[obj]==nil then savedOverlays[obj] = obj.Visible end
-                    pcall(function() obj.Visible=false end)
-                end
-            end
-        end
+    if states.AntiFlash then
+        watchFlashObject(obj)
+        if flashEffect or knownOverlay then suppressFlashObject(obj) end
     end
 end
 
@@ -1879,7 +1875,7 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V28: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
+-- STAMINA V29: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
 --==============================================================
 
 local staminaOriginals = {}
@@ -1938,6 +1934,21 @@ local function findStaminaObjects()
     end
     local hud=PlayerGui:FindFirstChild("StaminaHUD")
     if hud and not seen[hud] then table.insert(found,hud) end
+    -- O relatório identificou a barra visual exata. Ela é observada, nunca
+    -- forçada para 100%, pois pode ser apenas apresentação do valor do servidor.
+    if hud then
+        local frame=hud:FindFirstChild("Frame")
+        local fill=frame and frame:FindFirstChild("Frame")
+        if fill and fill:IsA("GuiObject") then
+            local scale=fill.Size.X.Scale
+            if states.DataCollector then
+                local data={Event="StaminaHUDSample",Path=safePath(fill),
+                    FillScale=scale,Visible=fill.Visible,
+                    CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")}
+                queueReport(data,"StaminaHUDSample|"..tostring(math.floor(os.clock()*2)))
+            end
+        end
+    end
     return found
 end
 
@@ -2079,7 +2090,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV28"
+gui.Name = "RoubeOuMorraV29"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -2108,7 +2119,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V28  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V29  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -2292,7 +2303,7 @@ local function addToggle(page,name,key,callback,targetTable,allowWithoutAssistan
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V28] "..name..": "..tostring(err))
+                warn("[V29] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -2378,11 +2389,11 @@ addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 addSection(pCollect,"COLETA")
 addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Stamina Infinita (experimental - depende de valor local acessível)","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Stamina Infinita (experimental — requer valor local autorizado)","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V28: estamina, entidades, ferramentas, projéteis e clarões",function()
+addButton(pData,"V29: estamina, entidades, ferramentas, projéteis e clarões",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
@@ -2510,7 +2521,9 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V28",
+        "DIAGNÓSTICO DE STAMINA V29",
+        "HUD observado: PlayerGui.StaminaHUD.Frame.Frame",
+        "A largura da barra é visual; não prova autoridade sobre a stamina real.",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
