@@ -1,7 +1,7 @@
 --==============================================================
--- ROUBE OU MORRA V33 | Feito por Tales
+-- ROUBE OU MORRA V34 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash preservado | V33: diagnóstico ampliado, pulo automático e ocultação visual local
+-- Anti-Flash preservado | V34: salto dinâmico e diagnóstico ampliado
 -- Resistência (barra fina) registrada apenas como referência visual separada
 -- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
@@ -815,7 +815,7 @@ end
 
 local function queueReport(entry,key)
     if not states.DataCollector then return end
-    -- V32: Assistente A envia somente sinais relacionados à investigação da estamina.
+    -- Assistente A mantém a coleta seletiva para os sistemas investigados.
     if states.AssistantA and not assistantReportIsRelevant(entry) then return end
 
     -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
@@ -1197,9 +1197,22 @@ local function staminaSnapshot(reason)
         Spectating=tostring(player:GetAttribute("Spectating")),
         PlayerAttributes={},CharacterAttributes={}
     }
-    for k,val in pairs(player:GetAttributes()) do data.PlayerAttributes[k]=tostring(val) end
+    local numericAttributeCandidates={}
+    for k,val in pairs(player:GetAttributes()) do
+        data.PlayerAttributes[k]=tostring(val)
+        if type(val)=="number" then
+            table.insert(numericAttributeCandidates,{Owner="Player",Name=k,Value=val,
+                NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fôlego"})})
+        end
+    end
     if char then
-        for k,val in pairs(char:GetAttributes()) do data.CharacterAttributes[k]=tostring(val) end
+        for k,val in pairs(char:GetAttributes()) do
+            data.CharacterAttributes[k]=tostring(val)
+            if type(val)=="number" then
+                table.insert(numericAttributeCandidates,{Owner="Character",Name=k,Value=val,
+                    NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fôlego"})})
+            end
+        end
         local hum=char:FindFirstChildOfClass("Humanoid")
         if hum then
             data.Health=hum.Health
@@ -1277,7 +1290,7 @@ local function staminaSnapshot(reason)
             InMatch=tostring(player:GetAttribute("InMatch")),InLobby=tostring(player:GetAttribute("InLobby")),
             Movement=char and char:FindFirstChildOfClass("Humanoid")
                 and tostring(char:FindFirstChildOfClass("Humanoid").MoveDirection) or "NoCharacter",
-            Candidates=candidates,Visited=totalVisited,
+            Candidates=candidates,NumericAttributes=numericAttributeCandidates,Visited=totalVisited,
             CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
             "LocalNumericCandidateSnapshot|"..tostring(math.floor(now/2)))
     end
@@ -2101,7 +2114,7 @@ local function setInfiniteStamina(enabled)
 end
 
 --==============================================================
--- V33 | PULO AUTOMÁTICO E OCULTAÇÃO VISUAL
+-- V34 | PULO DINÂMICO E OCULTAÇÃO VISUAL
 --==============================================================
 local autoJumpGeneration=0
 local lastAutoJumpAt=0
@@ -2128,6 +2141,7 @@ movementAndVisibilitySnapshot = function(reason)
     end
     local visibility={Event="VisibilityStateSample",Reason=tostring(reason or "Periodic"),
         LocalInvisible=states.PlayerInvisible==true,ServerStealthConfirmed=false,
+        VisibilityMode="ClientVisualOnly_ServerAIIntegrationRequired",
         PlayerAttributes={},CharacterAttributes={},CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")}
     pcall(function() for k,v in pairs(player:GetAttributes()) do
         if contains(k,{"invis","visible","stealth","hide","detect","sight"}) then visibility.PlayerAttributes[k]=tostring(v) end
@@ -2186,9 +2200,11 @@ local function setAutoJump(enabled)
     autoJumpGeneration+=1
     local generation=autoJumpGeneration
     if not enabled then return end
+
     task.spawn(function()
         local rayParams=RaycastParams.new()
         rayParams.FilterType=Enum.RaycastFilterType.Exclude
+
         while generation==autoJumpGeneration and gui and gui.Parent do
             local char=player.Character
             local hum=char and char:FindFirstChildOfClass("Humanoid")
@@ -2197,57 +2213,78 @@ local function setAutoJump(enabled)
                 rayParams.FilterDescendantsInstances={char,espFolder}
                 local move=hum.MoveDirection
                 local horizontal=Vector3.new(move.X,0,move.Z)
-                local speed=Vector3.new(root.AssemblyLinearVelocity.X,0,root.AssemblyLinearVelocity.Z).Magnitude
-                if horizontal.Magnitude>0.15 and speed>0.8 and hum.FloorMaterial~=Enum.Material.Air then
+                local velocity=root.AssemblyLinearVelocity
+                local speed=Vector3.new(velocity.X,0,velocity.Z).Magnitude
+
+                if horizontal.Magnitude>0.15 and speed>0.55 and hum.FloorMaterial~=Enum.Material.Air then
                     local direction=horizontal.Unit
-                    local origin=root.Position+Vector3.new(0,-1.4,0)
-                    local low=Workspace:Raycast(origin,direction*3.8,rayParams)
-                    if low and low.Instance and low.Instance:IsA("BasePart") and low.Instance.CanCollide
-                        and not low.Instance:IsDescendantOf(char) then
-                        -- Estima o topo para tentar superar caixas, balcões e objetos maiores.
-                        local jumpHeight=hum.UseJumpPower and math.clamp(hum.JumpPower*0.10,2.5,7.5)
-                            or math.clamp(hum.JumpHeight,2.5,7.5)
-                        local topOrigin=low.Position+direction*1.5+Vector3.new(0,jumpHeight+1.5,0)
-                        local topHit=Workspace:Raycast(topOrigin,Vector3.new(0,-(jumpHeight+3),0),rayParams)
-                        local topReachable=false
-                        if topHit and topHit.Instance==low.Instance then
-                            local obstacleHeight=topHit.Position.Y-(root.Position.Y-2.5)
-                            topReachable=obstacleHeight>0.35 and obstacleHeight<=jumpHeight+1.0
-                        end
-                        local upperOrigin=root.Position+Vector3.new(0,2.2,0)
-                        local upper=Workspace:Raycast(upperOrigin,direction*3.2,rayParams)
-                        local hasHeadClearance=(upper==nil) or (topReachable and upper.Instance==low.Instance)
-                        if (topReachable or (upper==nil and low.Distance<=2.8)) and hasHeadClearance
-                            and os.clock()-lastAutoJumpAt>=0.85 then
+                    local footY=root.Position.Y-(hum.HipHeight+root.Size.Y*0.5)
+                    local lowOrigin=Vector3.new(root.Position.X,footY+0.65,root.Position.Z)
+                    local low=Workspace:Raycast(lowOrigin,direction*5.5,rayParams)
+                    local obstacle=low and low.Instance
+
+                    if obstacle and obstacle:IsA("BasePart") and obstacle.CanCollide
+                        and not obstacle:IsDescendantOf(char) then
+                        -- Procura o topo real do mesmo objeto. A antiga V33 limitava
+                        -- a estimativa a 7,5 studs e descartava quase todos os obstáculos altos.
+                        local probeDistance=math.max(1.0,math.min(4.0,low.Distance+0.8))
+                        local topOrigin=lowOrigin+direction*probeDistance+Vector3.new(0,300,0)
+                        local topHit=Workspace:Raycast(topOrigin,Vector3.new(0,-320,0),rayParams)
+                        local topY=nil
+                        if topHit and topHit.Instance==obstacle then topY=topHit.Position.Y end
+
+                        local obstacleHeight=topY and math.max(0,topY-footY) or nil
+                        local obstacleSize=obstacle.Size
+                        local projectedWidth=math.abs(direction.X)*obstacleSize.X
+                            +math.abs(direction.Z)*obstacleSize.Z
+                        local clearanceOrigin=root.Position+Vector3.new(0,hum.HipHeight+1.5,0)
+                        local headHit=Workspace:Raycast(clearanceOrigin,direction*math.max(2.5,math.min(projectedWidth+2,12)),rayParams)
+
+                        -- Impulso dinâmico: calcula a velocidade necessária para subir
+                        -- acima do topo medido. O teto é alto para evitar o antigo limite
+                        -- baixo, mas a física/servidor ainda pode rejeitar o impulso.
+                        local requiredHeight=obstacleHeight and (obstacleHeight+3.5) or 14
+                        local jumpVelocity=math.sqrt(2*Workspace.Gravity*requiredHeight)
+                        jumpVelocity=math.max(jumpVelocity,Workspace.Gravity*0.9)
+                        jumpVelocity=math.min(jumpVelocity,300)
+                        local topKnown=obstacleHeight~=nil and obstacleHeight>0.25
+                        local plausibleObstacle=(topKnown and obstacleHeight<=250)
+                            or (not topKnown and low.Distance<=2.4 and headHit~=nil)
+                        local headClear=(headHit==nil) or (headHit.Instance==obstacle)
+                        local key=safePath(obstacle)
+
+                        if plausibleObstacle and headClear and os.clock()-lastAutoJumpAt>=1.15 then
                             lastAutoJumpAt=os.clock()
                             pcall(function()
-                                -- Tenta o estado padrão e aplica impulso vertical como alternativa.
                                 hum.Jump=true
                                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                                local velocity=root.AssemblyLinearVelocity
-                                local impulse=math.sqrt(2*Workspace.Gravity*jumpHeight)
-                                if velocity.Y<impulse*0.72 then
-                                    root.AssemblyLinearVelocity=Vector3.new(velocity.X,impulse,velocity.Z)
+                                local current=root.AssemblyLinearVelocity
+                                if current.Y<jumpVelocity then
+                                    root.AssemblyLinearVelocity=Vector3.new(current.X,jumpVelocity,current.Z)
                                 end
                             end)
+
                             if states.DataCollector then
-                                queueReport({Event="MovementObstacleSnapshot",ObstacleName=low.Instance.Name,
-                                    ObstacleClass=low.Instance.ClassName,ObstaclePath=safePath(low.Instance),
+                                queueReport({Event="MovementObstacleSnapshot",ObstacleName=obstacle.Name,
+                                    ObstacleClass=obstacle.ClassName,ObstaclePath=safePath(obstacle),
                                     ObstaclePosition=tostring(low.Position),ObstacleDistance=low.Distance,
-                                    EstimatedTopReachable=topReachable,EstimatedJumpHeight=jumpHeight,
-                                    HumanoidState=tostring(hum:GetState()),MoveDirection=tostring(move),
+                                    ObstacleHeight=obstacleHeight,ObstacleProjectedWidth=projectedWidth,
+                                    EstimatedJumpVelocity=jumpVelocity,EstimatedTopReachable=topKnown,
+                                    HeadClearance=headClear,HumanoidState=tostring(hum:GetState()),
+                                    MoveDirection=tostring(move),HorizontalSpeed=speed,
                                     CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
-                                    "MovementObstacleSnapshot|"..tostring(math.floor(os.clock()*2)))
+                                    "MovementObstacleSnapshot|"..key.."|"..tostring(math.floor(os.clock()*2)))
                             end
                         end
                     end
                 end
             end
+
             if states.DataCollector and os.clock()-lastMovementReportAt>=5 then
                 lastMovementReportAt=os.clock()
                 movementAndVisibilitySnapshot("MovementPeriodic")
             end
-            task.wait(0.12)
+            task.wait(0.10)
         end
     end)
 end
