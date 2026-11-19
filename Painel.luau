@@ -1,5 +1,5 @@
 --==============================================================
--- ROUBE OU MORRA V29 | Feito por Tales
+-- ROUBE OU MORRA V30 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
 -- Anti-Flash direcionado | Diagnóstico da StaminaHUD | Coleta seletiva
 -- Limites defensivos para desempenho mobile e tipografia padronizada
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -58,10 +58,12 @@ local previousV27ESPFolder = Workspace:FindFirstChild("TalesESP_V27_Folder")
 if previousV27ESPFolder then previousV27ESPFolder:Destroy() end
 local previousV28ESPFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
 if previousV28ESPFolder then previousV28ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V29_Folder")
+local previousV29ESPFolder = Workspace:FindFirstChild("TalesESP_V29_Folder")
+if previousV29ESPFolder then previousV29ESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V30_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V29_Folder"
+    espFolder.Name = "TalesESP_V30_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -1152,6 +1154,10 @@ local function makeObjectReport(obj,eventName)
         if obj:IsA("Frame") then
             entry.BackgroundColor3=tostring(obj.BackgroundColor3)
             entry.BackgroundTransparency=obj.BackgroundTransparency
+        elseif obj:IsA("ImageLabel") then
+            entry.Image=obj.Image
+            entry.ImageColor3=tostring(obj.ImageColor3)
+            entry.ImageTransparency=obj.ImageTransparency
         elseif obj:IsA("TextLabel") then
             entry.Text=obj.Text
         end
@@ -1178,6 +1184,9 @@ local function staminaSnapshot(reason)
         Event="StaminaContext",
         Reason=reason or "Sample",
         CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        InMatch=tostring(player:GetAttribute("InMatch")),
+        InLobby=tostring(player:GetAttribute("InLobby")),
+        Spectating=tostring(player:GetAttribute("Spectating")),
         PlayerAttributes={},CharacterAttributes={}
     }
     for k,val in pairs(player:GetAttributes()) do data.PlayerAttributes[k]=tostring(val) end
@@ -1228,19 +1237,25 @@ local function staminaSnapshot(reason)
                     table.insert(hudObjects,descendant)
                 end
             end
+            local hudTree={}
             for _,obj in ipairs(hudObjects) do
                 local candidate=obj:IsA("Frame") or obj:IsA("ImageLabel")
                     or (obj:IsA("TextLabel") and tonumber(obj.Text)~=nil)
                 if candidate then
                     local signature=tostring(obj.Size).."|"..tostring(obj.Visible)
+                    local colorInfo=""
                     if obj:IsA("Frame") then
-                        signature=signature.."|"..tostring(obj.BackgroundColor3)
-                            .."|"..tostring(obj.BackgroundTransparency)
+                        colorInfo=tostring(obj.BackgroundColor3).."|"..tostring(obj.BackgroundTransparency)
                     elseif obj:IsA("ImageLabel") then
-                        signature=signature.."|"..tostring(obj.ImageColor3)
-                            .."|"..tostring(obj.ImageTransparency)
+                        colorInfo=tostring(obj.ImageColor3).."|"..tostring(obj.ImageTransparency)
                     elseif obj:IsA("TextLabel") then
-                        signature=signature.."|"..obj.Text
+                        colorInfo=obj.Text
+                    end
+                    signature=signature.."|"..colorInfo
+                    if #hudTree<24 then
+                        table.insert(hudTree,{Path=safePath(obj),Class=obj.ClassName,
+                            Size=tostring(obj.Size),AbsoluteSize=tostring(obj.AbsoluteSize),
+                            Visible=tostring(obj.Visible),Visual=colorInfo})
                     end
                     local previous=hudVisualState[obj]
                     hudVisualState[obj]=signature
@@ -1255,6 +1270,11 @@ local function staminaSnapshot(reason)
                         queueReport(hudEntry,"HUDChange|"..safePath(obj).."|"..tostring(math.floor(now*2)))
                     end
                 end
+            end
+            if #hudTree>0 then
+                queueReport({Event="StaminaHUDTreeSample",Reason=reason,Objects=hudTree,
+                    CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
+                    "StaminaHUDTreeSample|"..tostring(math.floor(now*2)))
             end
         end
     end
@@ -1579,7 +1599,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V29 - RELATORIO",
+        "ROUBE OU MORRA V30 - RELATORIO",
         "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -1751,6 +1771,45 @@ local function isKnownRarityFlashOverlay(obj)
     return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.ImageTransparency<0.25
 end
 
+local function isFlashGuiOverlay(obj)
+    if not obj or not (obj:IsA("Frame") or obj:IsA("ImageLabel")) then return false end
+    local current=obj.Parent
+    local inKnownFlashGui=false
+    for _=1,12 do
+        if not current then break end
+        if current:IsA("ScreenGui") and (current.Name=="Flashbang" or current.Name=="NullFlash") then
+            inKnownFlashGui=true
+            break
+        end
+        current=current.Parent
+    end
+    if not inKnownFlashGui then return false end
+    local camera=Workspace.CurrentCamera
+    local screen=camera and camera.ViewportSize or Vector2.new(0,0)
+    local size=obj.AbsoluteSize
+    if screen.X<=0 or screen.Y<=0 or size.X<screen.X*0.80 or size.Y<screen.Y*0.80 then
+        return false
+    end
+    if obj:IsA("Frame") then
+        local c=obj.BackgroundColor3
+        return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.BackgroundTransparency<0.90
+    end
+    local c=obj.ImageColor3
+    return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.ImageTransparency<0.90
+end
+
+local function isInsideFlashGui(obj)
+    local current=obj
+    for _=1,12 do
+        if not current then break end
+        if current:IsA("ScreenGui") and (current.Name=="Flashbang" or current.Name=="NullFlash") then
+            return true
+        end
+        current=current.Parent
+    end
+    return false
+end
+
 local function suppressFlashObject(obj)
     if not obj or not obj.Parent then return end
     if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") then
@@ -1759,7 +1818,7 @@ local function suppressFlashObject(obj)
             pcall(function() obj.Enabled=false end)
         end
     elseif obj:IsA("Frame") or obj:IsA("ImageLabel") then
-        if isKnownRarityFlashOverlay(obj) then
+        if isKnownRarityFlashOverlay(obj) or isFlashGuiOverlay(obj) then
             if savedOverlays[obj]==nil then savedOverlays[obj]=obj.Visible end
             pcall(function() obj.Visible=false end)
         end
@@ -1769,6 +1828,7 @@ end
 local function watchFlashObject(obj)
     if not obj or watchedFlashObjects[obj] then return end
     local target=effectLooksLikeFlash(obj) or isKnownRarityFlashOverlay(obj)
+        or isInsideFlashGui(obj)
     if not target then return end
     watchedFlashObjects[obj]=true
     if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") then
@@ -1776,9 +1836,19 @@ local function watchFlashObject(obj)
             if states.AntiFlash and obj.Parent and obj.Enabled then suppressFlashObject(obj) end
         end)
     elseif obj:IsA("GuiObject") then
-        obj:GetPropertyChangedSignal("Visible"):Connect(function()
+        local function recheck()
             if states.AntiFlash and obj.Parent and obj.Visible then suppressFlashObject(obj) end
-        end)
+        end
+        obj:GetPropertyChangedSignal("Visible"):Connect(recheck)
+        if obj:IsA("Frame") then
+            obj:GetPropertyChangedSignal("BackgroundTransparency"):Connect(recheck)
+            obj:GetPropertyChangedSignal("BackgroundColor3"):Connect(recheck)
+        elseif obj:IsA("ImageLabel") then
+            obj:GetPropertyChangedSignal("ImageTransparency"):Connect(recheck)
+            obj:GetPropertyChangedSignal("ImageColor3"):Connect(recheck)
+        end
+        obj:GetPropertyChangedSignal("AbsoluteSize"):Connect(recheck)
+        obj:GetPropertyChangedSignal("Size"):Connect(recheck)
     end
 end
 
@@ -1786,19 +1856,25 @@ local function inspectFlashObject(obj)
     if (not states.AntiFlash and not states.DataCollector) or not obj or isInsideShop(obj) then return end
     local flashEffect=effectLooksLikeFlash(obj)
     local knownOverlay=isKnownRarityFlashOverlay(obj)
+    local flashGuiOverlay=isFlashGuiOverlay(obj)
+    local insideFlashGui=isInsideFlashGui(obj)
     local visualClass=obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect")
     local recentVisualCandidate=visualClass and os.clock()<=recentToolUseUntil
 
-    if (flashEffect or knownOverlay or recentVisualCandidate) and states.DataCollector
+    if (flashEffect or knownOverlay or flashGuiOverlay or recentVisualCandidate
+        or (insideFlashGui and obj:IsA("GuiObject"))) and states.DataCollector
         and not reportedFlashObjects[obj] then
         reportedFlashObjects[obj]=true
-        makeObjectReport(obj,knownOverlay and "FullScreenWhiteFlashOverlayDetected"
-            or (flashEffect and "FlashVisualEffectDetected" or "VisualEffectAfterToolActivation"))
+        local eventName=(knownOverlay or flashGuiOverlay) and "FullScreenWhiteFlashOverlayDetected"
+            or (flashEffect and "FlashVisualEffectDetected"
+            or ((insideFlashGui and obj:IsA("GuiObject")) and "FlashGuiChildObserved"
+            or "VisualEffectAfterToolActivation"))
+        makeObjectReport(obj,eventName)
     end
 
     if states.AntiFlash then
-        watchFlashObject(obj)
-        if flashEffect or knownOverlay then suppressFlashObject(obj) end
+        if insideFlashGui or flashEffect or knownOverlay then watchFlashObject(obj) end
+        if flashEffect or knownOverlay or flashGuiOverlay then suppressFlashObject(obj) end
     end
 end
 
@@ -2119,7 +2195,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V29  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V30  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -2521,9 +2597,11 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V29",
-        "HUD observado: PlayerGui.StaminaHUD.Frame.Frame",
-        "A largura da barra é visual; não prova autoridade sobre a stamina real.",
+        "DIAGNÓSTICO DE STAMINA V30",
+        "HUD observado: PlayerGui.StaminaHUD (amostragem dos elementos internos)",
+        "Resistência e Stamina são tratadas separadamente; a barra visual não prova o valor real.",
+        "A coleta agora registra até 24 elementos da HUD para distinguir as duas barras.",
+        "Valores controlados pelo servidor não podem ser garantidos por alteração local.",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
