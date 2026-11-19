@@ -1,7 +1,7 @@
 --==============================================================
--- ROUBE OU MORRA V30 | Feito por Tales
+-- ROUBE OU MORRA V31 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash direcionado | Diagnóstico da StaminaHUD | Coleta seletiva
+-- Anti-Flash preservado | Estamina: aliases conhecidos + diagnóstico numérico local | Coleta seletiva
 -- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
 
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -60,10 +60,10 @@ local previousV28ESPFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
 if previousV28ESPFolder then previousV28ESPFolder:Destroy() end
 local previousV29ESPFolder = Workspace:FindFirstChild("TalesESP_V29_Folder")
 if previousV29ESPFolder then previousV29ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V30_Folder")
+local espFolder = Workspace:FindFirstChild("TalesESP_V31_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V30_Folder"
+    espFolder.Name = "TalesESP_V31_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -1599,7 +1599,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V30 - RELATORIO",
+        "ROUBE OU MORRA V31 - RELATORIO",
         "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -1951,7 +1951,7 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V29: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
+-- STAMINA V31: TENTATIVA POR NOMES CONHECIDOS + DIAGNÓSTICO DIRECIONADO
 --==============================================================
 
 local staminaOriginals = {}
@@ -1967,8 +1967,10 @@ local function isWritableStaminaValue(name)
     -- Não confundir UpgradeStamina/UpgradeSprint com a barra atual.
     return normalized=="stamina" or normalized=="currentstamina"
         or normalized=="staminacurrent" or normalized=="staminavalue"
-        or normalized=="sprintstamina" or normalized=="currentenergy"
-        or normalized=="energycurrent" or normalized=="energyvalue"
+        or normalized=="sprintstamina" or normalized=="currentsprintstamina"
+        or normalized=="staminaamount" or normalized=="staminapool"
+        or normalized=="currentenergy" or normalized=="energycurrent"
+        or normalized=="energyvalue" or normalized=="currentstaminaamount"
 end
 
 local function findStaminaObjects()
@@ -2166,7 +2168,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV29"
+gui.Name = "RoubeOuMorraV31"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -2195,7 +2197,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V30  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V31  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -2465,11 +2467,11 @@ addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 addSection(pCollect,"COLETA")
 addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Stamina Infinita (experimental — requer valor local autorizado)","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V29: estamina, entidades, ferramentas, projéteis e clarões",function()
+addButton(pData,"V31: estamina, entidades, ferramentas, projéteis e clarões",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
@@ -2597,7 +2599,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V30",
+        "DIAGNÓSTICO DE STAMINA V31",
         "HUD observado: PlayerGui.StaminaHUD (amostragem dos elementos internos)",
         "Resistência e Stamina são tratadas separadamente; a barra visual não prova o valor real.",
         "A coleta agora registra até 24 elementos da HUD para distinguir as duas barras.",
@@ -2613,14 +2615,42 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     }
 
     for _,obj in ipairs(found) do
-        table.insert(lines,obj:GetFullName().." ["..obj.ClassName.."]")
+        local detail=obj:GetFullName().." ["..obj.ClassName.."]"
+        if obj:IsA("ValueBase") then
+            local ok,value=pcall(function() return obj.Value end)
+            if ok then detail=detail.." = "..tostring(value) end
+        end
+        table.insert(lines,detail)
         local attrs=obj:GetAttributes()
-        for _,key in ipairs({"UpgradeStamina","UpgradeSprint","Skills","Stamina","CurrentStamina","SprintStamina","HoldEndStamina","Energy"}) do
-            if attrs[key]~=nil then
-                table.insert(lines,"  "..key.." = "..tostring(attrs[key]))
+        for key,value in pairs(attrs) do
+            if isStaminaName(key) or key=="UpgradeStamina" or key=="UpgradeSprint" or key=="Skills" then
+                table.insert(lines,"  atributo "..key.." = "..tostring(value))
             end
         end
     end
+
+    -- Mostra também valores numéricos locais que podem ter nomes não óbvios,
+    -- sem alterar nenhum deles. Isso ajuda a descobrir qual acompanha a HUD.
+    local roots={player,player.Character,player:FindFirstChild("PlayerScripts"),player:FindFirstChild("Backpack"),PlayerGui}
+    local listed={}
+    for _,root in ipairs(roots) do
+        if root then
+            for _,obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                    if not listed[obj] then
+                        listed[obj]=true
+                        local line=obj:GetFullName().." = "..tostring(obj.Value)
+                        if isStaminaName(obj.Name) then
+                            table.insert(lines,"CANDIDATO NUMÉRICO: "..line)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.insert(lines,"")
+    table.insert(lines,"HoldEndStamina é observado, mas não é alterado: ainda não foi confirmado como estamina atual.")
+    table.insert(lines,"A barra HUD é somente visual; o botão só altera valores locais com nomes reconhecidos.")
 
     if #found==0 then
         table.insert(lines,"Nenhum objeto localizado.")
@@ -2745,7 +2775,7 @@ task.spawn(function()
             lastDoor = now
         end
 
-        if states.InfiniteStamina and now-lastStamina>=10 then
+        if states.InfiniteStamina and now-lastStamina>=2 then
             findStaminaObjects()
             lastStamina = now
         end
