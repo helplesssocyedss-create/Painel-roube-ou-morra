@@ -1,7 +1,8 @@
 --==============================================================
--- ROUBE OU MORRA V31 | Feito por Tales
+-- ROUBE OU MORRA V32 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash preservado | Estamina: aliases conhecidos + diagnóstico numérico local | Coleta seletiva
+-- Anti-Flash preservado | V32: coleta focada em estamina e candidatos numéricos locais
+-- Resistência (barra fina) registrada apenas como referência visual separada
 -- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
 
@@ -15,7 +16,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV32"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -60,10 +61,14 @@ local previousV28ESPFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
 if previousV28ESPFolder then previousV28ESPFolder:Destroy() end
 local previousV29ESPFolder = Workspace:FindFirstChild("TalesESP_V29_Folder")
 if previousV29ESPFolder then previousV29ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V31_Folder")
+local previousV30ESPFolder = Workspace:FindFirstChild("TalesESP_V30_Folder")
+if previousV30ESPFolder then previousV30ESPFolder:Destroy() end
+local previousV31ESPFolder = Workspace:FindFirstChild("TalesESP_V31_Folder")
+if previousV31ESPFolder then previousV31ESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V32_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V31_Folder"
+    espFolder.Name = "TalesESP_V32_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -793,23 +798,18 @@ local function assistantReportIsRelevant(entry)
     local name=string.lower(tostring(entry.Name or ""))
     local path=string.lower(tostring(entry.Path or ""))
     local blob=event.." "..name.." "..path
+
+    -- Assistente A agora envia somente dados úteis para descobrir a estamina.
+    -- A amostra numérica inclui objetos sem nome conhecido, para não perder a variável real.
+    if event=="localnumericcandidatesnapshot" or event=="staminacontext"
+        or event=="staminahudtreesample" or event=="staminahudsample" then return true end
     if contains(blob,{"stamina","sprint","holdendstamina","energy","endurance","folego","fôlego"}) then return true end
-    if contains(blob,{"roleorcharacter","player snapshot","entity","monster","enemy","characteradded","characterattribute","rolevalue"}) then return true end
-    if contains(blob,{"flash","flashburn","flashblur","whiteflash","overlay","colorcorrection","blurEffect"}) then return true end
-    if contains(blob,{"toolactivated","flashbang","explosion"}) then return true end
-    if entry.IsMonster~=nil or entry.PlayerAttributes or entry.CharacterAttributes then return true end
-    local attrs=entry.Attributes
-    if type(attrs)=="table" then
-        for k in pairs(attrs) do
-            if contains(k,{"stamina","sprint","entity","monster","role","flash"}) then return true end
-        end
-    end
     return false
 end
 
 local function queueReport(entry,key)
     if not states.DataCollector then return end
-    -- A Assistente A filtra ruído: só entram sinais ligados às quatro investigações prioritárias.
+    -- V32: Assistente A envia somente sinais relacionados à investigação da estamina.
     if states.AssistantA and not assistantReportIsRelevant(entry) then return end
 
     -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
@@ -1114,6 +1114,7 @@ local statLastReport = setmetatable({}, {__mode="k"})
 local eventSequence = 0
 local lastStaminaSample = 0
 local lastHudSample = 0
+local lastNumericCandidateSample = 0
 local hudVisualState = setmetatable({}, {__mode="k"})
 
 local function safePath(obj)
@@ -1221,6 +1222,57 @@ local function staminaSnapshot(reason)
             end
         end
         data.CharacterValues=statValues
+    end
+
+    -- V32: procura valores numéricos locais mesmo quando o nome não contém
+    -- "stamina". Isso permite correlacionar os valores com correr/parar.
+    -- A resistência (barra fina) é tratada como recurso distinto, não como estamina.
+    if now-lastNumericCandidateSample>=2 then
+        lastNumericCandidateSample=now
+        local roots={}
+        if char then table.insert(roots,char) end
+        local scripts=player:FindFirstChild("PlayerScripts")
+        local backpack=player:FindFirstChild("Backpack")
+        if scripts then table.insert(roots,scripts) end
+        if backpack then table.insert(roots,backpack) end
+        table.insert(roots,PlayerGui)
+        table.insert(roots,player)
+        local candidates={}
+        local seenCandidates={}
+        local totalVisited=0
+        for _,root in ipairs(roots) do
+            local objects={root}
+            if root==player then
+                for _,child in ipairs(root:GetChildren()) do table.insert(objects,child) end
+            else
+                for _,desc in ipairs(root:GetDescendants()) do table.insert(objects,desc) end
+            end
+            for _,obj in ipairs(objects) do
+                totalVisited+=1
+                if totalVisited>1800 then break end
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                    if not seenCandidates[obj] and #candidates<120 then
+                        seenCandidates[obj]=true
+                        local value
+                        pcall(function() value=obj.Value end)
+                        table.insert(candidates,{
+                            Name=obj.Name,Class=obj.ClassName,Path=safePath(obj),
+                            Value=value,ValueString=tostring(value),
+                            NameSuggestsStamina=contains(obj.Name,{"stamina","sprint","energy","folego","fôlego"}),
+                            NameSuggestsResistance=contains(obj.Name,{"resist","endurance"})
+                        })
+                    end
+                end
+            end
+            if totalVisited>1800 then break end
+        end
+        queueReport({Event="LocalNumericCandidateSnapshot",Reason=reason or "Sample",
+            InMatch=tostring(player:GetAttribute("InMatch")),InLobby=tostring(player:GetAttribute("InLobby")),
+            Movement=char and char:FindFirstChildOfClass("Humanoid")
+                and tostring(char:FindFirstChildOfClass("Humanoid").MoveDirection) or "NoCharacter",
+            Candidates=candidates,Visited=totalVisited,
+            CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
+            "LocalNumericCandidateSnapshot|"..tostring(math.floor(now/2)))
     end
 
     -- A barra pode ser apenas visual. Durante corrida/parada, compara alguns
@@ -1367,13 +1419,10 @@ assistantTargetedScan = function(reason)
     scanCount += 1
     lastScan = os.date("%d/%m/%Y %H:%M:%S")
     local before=#records
-    for _,plr in ipairs(Players:GetPlayers()) do
-        roleSnapshot(plr,reason or "AssistantPriorityScan")
-    end
     if states.DataCollector then
-        staminaSnapshot(reason or "AssistantPriorityScan")
-        -- Efeitos visuais novos são tratados por DescendantAdded; sem varredura
-        -- repetida de toda a interface a cada ciclo do coletor.
+        staminaSnapshot(reason or "AssistantStaminaScan")
+        -- V32 não coleta papéis, monstros, ferramentas ou efeitos: somente
+        -- contexto de movimento, HUD da estamina e candidatos numéricos locais.
     end
     lastDataScan=os.clock()
     return math.max(0,#records-before),0
@@ -1599,8 +1648,8 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V31 - RELATORIO",
-        "Monitoramento de personagem/função e eventos replicados",
+        "ROUBE OU MORRA V32 - RELATORIO",
+        "Investigação focada de estamina e candidatos numéricos locais",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
@@ -1951,7 +2000,7 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V31: TENTATIVA POR NOMES CONHECIDOS + DIAGNÓSTICO DIRECIONADO
+-- STAMINA V32: COLETA FOCADA EM VALORES NUMÉRICOS LOCAIS
 --==============================================================
 
 local staminaOriginals = {}
@@ -2168,7 +2217,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV31"
+gui.Name = "RoubeOuMorraV32"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -2197,7 +2246,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V31  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V32  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
