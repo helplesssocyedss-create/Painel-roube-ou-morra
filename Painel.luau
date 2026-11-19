@@ -1,5 +1,5 @@
 --==============================================================
--- ROUBE OU MORRA V27 | Feito por Tales
+-- ROUBE OU MORRA V28 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
 -- Proteção contra falsos positivos visuais | Coleta otimizada
 -- Limites defensivos para desempenho mobile e tipografia padronizada
@@ -15,7 +15,7 @@ local CollectionService = game:GetService("CollectionService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -27,7 +27,7 @@ local states = {
     RemoveDoors=false, InstantCollection=false,
     Brightness=false, AntiFlash=false,
     DataCollector=false, AutoFarm=false,
-    InfiniteStamina=false
+    InfiniteStamina=false, AssistantA=false
 }
 
 local rarityEnabled = {
@@ -54,10 +54,12 @@ local monsterNames = {
 local highlights,labels = {},{}
 local previousESPFolder = Workspace:FindFirstChild("TalesESP_V26_Folder")
 if previousESPFolder then previousESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V27_Folder")
+local previousV27ESPFolder = Workspace:FindFirstChild("TalesESP_V27_Folder")
+if previousV27ESPFolder then previousV27ESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V28_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V27_Folder"
+    espFolder.Name = "TalesESP_V28_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -89,13 +91,14 @@ local espBusy = false
 local espGeneration = 0
 local espCandidateList,espCandidateSet = {},setmetatable({}, {__mode="k"})
 local espCacheBuilt = false
-local espLastRefresh = 0
 -- Limites defensivos para manter o ESP utilizável em dispositivos móveis.
 -- Alvos muito distantes não recebem Highlight/label; o cache continua incremental.
 local MAX_ESP_OBJECTS = 90
 local MAX_ESP_DISTANCE = 450
 local farmGeneration = 0
 local showPage
+local toggleDrawers={}
+local watchFlashRoot, inspectFlashRoot
 
 local sendRequest =
     (type(request)=="function" and request)
@@ -119,16 +122,39 @@ local function contains(value,list)
     return false
 end
 
+local characterOwners=setmetatable({}, {__mode="k"})
+local function registerPlayerCharacter(plr,char)
+    if char then characterOwners[char]=plr end
+end
+for _,plr in ipairs(Players:GetPlayers()) do
+    registerPlayerCharacter(plr,plr.Character)
+    plr.CharacterAdded:Connect(function(char) registerPlayerCharacter(plr,char) end)
+    plr.CharacterRemoving:Connect(function(char) characterOwners[char]=nil end)
+end
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function(char) registerPlayerCharacter(plr,char) end)
+    plr.CharacterRemoving:Connect(function(char) characterOwners[char]=nil end)
+end)
+Players.PlayerRemoving:Connect(function(plr)
+    if plr.Character then characterOwners[plr.Character]=nil end
+end)
+
 local function getPlayerFromModel(model)
+    local owner=characterOwners[model]
+    if owner and owner.Parent==Players then return owner end
+    -- Fallback raro para personagens que já existiam antes da conexão.
     for _,plr in ipairs(Players:GetPlayers()) do
-        if plr.Character==model then return plr end
+        if plr.Character==model then
+            characterOwners[model]=plr
+            return plr
+        end
     end
 end
 
 local knownEntityKinds = {
     tenant=true, hollow=true, locust=true, rictus=true, wendell=true,
-    mimic=true, thetenant=true, thehollow=true, thelocust=true,
-    therictus=true, thewendell=true
+    mimic=true, wraith=true, maternalwraith=true, thetenant=true, thehollow=true,
+    thelocust=true, therictus=true, thewendell=true, thematernalwraith=true
 }
 
 local function normalizedEntityKind(value)
@@ -148,7 +174,7 @@ local function hasExplicitEntityFlag(container)
             if v=="true" or v=="1" or v=="yes" then return true end
         end
     end
-    for _,key in ipairs({"EntityKind","EntityType","EntitySelected","Role","TeamRole","CharacterType","NPCType","Class","CharacterClass"}) do
+    for _,key in ipairs({"EntityKind","EntityType","Role","TeamRole","CharacterType","NPCType","Class","CharacterClass"}) do
         if normalizedEntityKind(container:GetAttribute(key)) then return true end
     end
     return false
@@ -161,16 +187,38 @@ local function isMonster(model)
     -- Para personagens de jogadores, não usamos nome, texto genérico, classe ou
     -- atributos de estado isolados. Exigimos uma marca explícita de entidade.
     if owner then
-        if hasExplicitEntityFlag(model) or hasExplicitEntityFlag(owner) then
-            return true
+        -- Em personagem de Player, seleção de entidade/loadout nunca prova transformação.
+        -- Exigimos marcador booleano de estado atual no Character ou no Player.
+        local function truthy(value)
+            if value==true or value==1 then return true end
+            if type(value)=="string" then
+                local v=string.lower(value)
+                return v=="true" or v=="1" or v=="yes"
+            end
+            return false
+        end
+        local inLobby=truthy(model:GetAttribute("InLobby")) or truthy(owner:GetAttribute("InLobby"))
+        local inMatch=model:GetAttribute("InMatch")
+        if inMatch==nil then inMatch=owner:GetAttribute("InMatch") end
+        if inLobby and inMatch~=nil and not truthy(inMatch) then return false end
+        local function currentFlag(container)
+            if not container then return false end
+            for _,key in ipairs({"IsMonster","IsEntity","IsEnemy","Monster","Enemy"}) do
+                if truthy(container:GetAttribute(key)) then return true end
+            end
+            return false
+        end
+        if currentFlag(model) or currentFlag(owner) then return true end
+        -- EntityKind/EntityType no Character são aceitos como estado efetivo replicado;
+        -- EntitySelected no Player é deliberadamente ignorado.
+        for _,key in ipairs({"EntityKind","EntityType","CurrentEntityKind"}) do
+            if normalizedEntityKind(model:GetAttribute(key)) then return true end
         end
         local ok,tags=pcall(function() return CollectionService:GetTags(model) end)
         if ok then
             for _,tag in ipairs(tags) do
                 local t=string.lower(tostring(tag)):gsub("[%s_%-]","")
-                if t=="entity" or t=="monster" or t=="enemy" or t=="isentity" then
-                    return true
-                end
+                if t=="entity" or t=="monster" or t=="enemy" or t=="isentity" then return true end
             end
         end
         return false
@@ -189,17 +237,8 @@ local function isMonster(model)
 
     if contains(model.Name,monsterNames) then return true end
 
-    -- Fallback por ValueBase somente para NPCs, nunca para personagens de Players.
-    for _,obj in ipairs(model:GetDescendants()) do
-        if obj:IsA("BoolValue") and obj.Value
-            and contains(obj.Name,{"monster","enemy","entity","monstro","inimigo"}) then
-            return true
-        elseif obj:IsA("StringValue")
-            and contains(obj.Name,{"role","class","type","monster","entity","team"})
-            and normalizedEntityKind(obj.Value) then
-            return true
-        end
-    end
+    -- Sem GetDescendants() aqui: a classificação precisa ser barata por chamada.
+    -- Marcadores ValueBase relevantes são observados separadamente pelo coletor.
     return false
 end
 
@@ -257,7 +296,7 @@ local function createESP(obj,color,textValue,small)
 
     if not highlights[obj] or not highlights[obj].Parent then
         local h = Instance.new("Highlight")
-        h.Name = "TalesESP_V27"
+        h.Name = "TalesESP_V28"
         h.Adornee = obj
         h.FillTransparency = 1
         h.OutlineTransparency = 0
@@ -288,7 +327,7 @@ local function createESP(obj,color,textValue,small)
 
     if not labels[obj] then
         local bill = Instance.new("BillboardGui")
-        bill.Name = "TalesESPLabel_V27"
+        bill.Name = "TalesESPLabel_V28"
         bill.AlwaysOnTop = true
         bill.Size = small and UDim2.fromOffset(118,18)
             or UDim2.fromOffset(104,16)
@@ -351,7 +390,16 @@ local espPending = false
 
 local function registerESPCandidate(obj)
     if not obj or espCandidateSet[obj] then return end
-    if obj:IsA("Model") or obj:IsA("BasePart") then
+    local eligible=false
+    if obj:IsA("Model") then
+        local isPlayerModel=getPlayerFromModel(obj)~=nil
+        local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
+        eligible=isPlayerModel or hasHumanoid or isMonster(obj)
+    elseif obj:IsA("BasePart") then
+        -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
+        eligible=isDuctRoot(obj) or getRarity(obj)~=nil
+    end
+    if eligible then
         espCandidateSet[obj] = true
         table.insert(espCandidateList,obj)
     end
@@ -734,8 +782,30 @@ local function reportFingerprint(entry)
     return tostring(hash)
 end
 
+local function assistantReportIsRelevant(entry)
+    if type(entry)~="table" then return false end
+    local event=string.lower(tostring(entry.Event or ""))
+    local name=string.lower(tostring(entry.Name or ""))
+    local path=string.lower(tostring(entry.Path or ""))
+    local blob=event.." "..name.." "..path
+    if contains(blob,{"stamina","sprint","holdendstamina","energy","endurance","folego","fôlego"}) then return true end
+    if contains(blob,{"roleorcharacter","player snapshot","entity","monster","enemy","characteradded","characterattribute","rolevalue"}) then return true end
+    if contains(blob,{"flash","flashburn","flashblur","whiteflash","overlay","colorcorrection","blurEffect"}) then return true end
+    if contains(blob,{"toolactivated","flashbang","explosion"}) then return true end
+    if entry.IsMonster~=nil or entry.PlayerAttributes or entry.CharacterAttributes then return true end
+    local attrs=entry.Attributes
+    if type(attrs)=="table" then
+        for k in pairs(attrs) do
+            if contains(k,{"stamina","sprint","entity","monster","role","flash"}) then return true end
+        end
+    end
+    return false
+end
+
 local function queueReport(entry,key)
     if not states.DataCollector then return end
+    -- A Assistente A filtra ruído: só entram sinais ligados às quatro investigações prioritárias.
+    if states.AssistantA and not assistantReportIsRelevant(entry) then return end
 
     -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
     -- uma chave própria, em vez de bloquear para sempre pelo caminho.
@@ -878,7 +948,10 @@ end
 -- COLETA DE DADOS
 --==============================================================
 
+local assistantTargetedScan
+
 local function scanGame()
+    if states.AssistantA and assistantTargetedScan then return assistantTargetedScan("AssistantScan") end
     scanCount += 1
     lastScan = os.date("%d/%m/%Y %H:%M:%S")
     local added,updated = 0,0
@@ -1025,7 +1098,7 @@ local function scanGame()
 end
 
 --==============================================================
--- V27: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
+-- V28: MONITORAMENTO DIRECIONADO DE PERSONAGENS, STATS E EVENTOS
 --==============================================================
 
 local watchedPlayers = setmetatable({}, {__mode="k"})
@@ -1115,11 +1188,13 @@ local function staminaSnapshot(reason)
             data.HumanoidState=tostring(hum:GetState())
         end
         local statValues={}
+        local function isStaminaCandidate(obj)
+            return obj and obj:IsA("ValueBase") and contains(obj.Name,{
+                "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fôlego"
+            })
+        end
         for _,obj in ipairs(char:GetDescendants()) do
-            if (obj:IsA("NumberValue") or obj:IsA("IntValue"))
-                or (obj:IsA("ValueBase") and contains(obj.Name,{
-                    "stamina","sprint","energy","resist","endurance","folego","fôlego"
-                })) then
+            if isStaminaCandidate(obj) then
                 local ok,value=pcall(function() return obj.Value end)
                 if ok then statValues[safePath(obj)]=tostring(value) end
             end
@@ -1127,7 +1202,7 @@ local function staminaSnapshot(reason)
         local scripts=player:FindFirstChild("PlayerScripts")
         if scripts then
             for _,obj in ipairs(scripts:GetDescendants()) do
-                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                if isStaminaCandidate(obj) then
                     local ok,value=pcall(function() return obj.Value end)
                     if ok then statValues[safePath(obj)]=tostring(value) end
                 end
@@ -1181,11 +1256,14 @@ local roleSnapshot
 local function watchStatObject(obj,source)
     if not obj or not obj:IsA("ValueBase") or watchedStats[obj] then return end
     local isNumeric=obj:IsA("NumberValue") or obj:IsA("IntValue")
-    local named=contains(obj.Name,{
-        "stamina","sprint","energy","resist","endurance","folego","fôlego",
+    local staminaNamed=contains(obj.Name,{
+        "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fôlego"
+    })
+    local roleNamed=contains(obj.Name,{
         "role","entity","monster","enemy","team","class","type","flash"
     })
-    if not isNumeric and not named then return end
+    local named=staminaNamed or roleNamed
+    if not named or (isNumeric and not staminaNamed and not roleNamed) then return end
     watchedStats[obj]=true
     makeObjectReport(obj,isNumeric and "NumericStatObserved" or "NamedStateObserved")
     obj.Changed:Connect(function()
@@ -1252,6 +1330,24 @@ roleSnapshot = function(plr,reason)
     if states.DataCollector then task.defer(flushReports) end
 end
 
+-- Varredura coordenada pela Assistente A: não percorre Workspace inteiro nem captura
+-- todos os GuiObjects/BaseParts. Prioriza estados de jogadores e amostras de stamina.
+assistantTargetedScan = function(reason)
+    scanCount += 1
+    lastScan = os.date("%d/%m/%Y %H:%M:%S")
+    local before=#records
+    for _,plr in ipairs(Players:GetPlayers()) do
+        roleSnapshot(plr,reason or "AssistantPriorityScan")
+    end
+    if states.DataCollector then
+        staminaSnapshot(reason or "AssistantPriorityScan")
+        -- Efeitos visuais novos são tratados por DescendantAdded; sem varredura
+        -- repetida de toda a interface a cada ciclo do coletor.
+    end
+    lastDataScan=os.clock()
+    return math.max(0,#records-before),0
+end
+
 local function watchTool(tool)
     if not tool or not tool:IsA("Tool") or watchedTools[tool] then return end
     watchedTools[tool]=true
@@ -1277,8 +1373,6 @@ local function watchTool(tool)
         end
     end)
 end
-
-local watchFlashRoot, inspectFlashRoot
 
 local function watchCharacter(char,plr)
     if not char or watchedCharacters[char] then return end
@@ -1474,7 +1568,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V27 - RELATORIO",
+        "ROUBE OU MORRA V28 - RELATORIO",
         "Monitoramento de personagem/função e eventos replicados",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -1602,7 +1696,7 @@ local function setBrightness(enabled)
 end
 
 --==============================================================
--- ANTI-FLASH V27
+-- ANTI-FLASH V28
 --==============================================================
 
 local function effectLooksLikeFlash(obj)
@@ -1697,8 +1791,13 @@ local function inspectFlashObject(obj)
                     reportedFlashObjects[obj]=true
                     makeObjectReport(obj,"FullScreenWhiteFlashOverlayDetected")
                 end
+                local parent=obj.Parent
+                local grandparent=parent and parent.Parent
+                local knownRarityOverlay=parent and parent.Name=="Frame"
+                    and grandparent and grandparent.Name=="RarityBoard"
                 if states.AntiFlash and (effectLooksLikeFlash(obj)
-                    or os.clock()<=recentToolUseUntil) then
+                    or os.clock()<=recentToolUseUntil
+                    or (states.AssistantA and knownRarityOverlay)) then
                     if savedOverlays[obj]==nil then savedOverlays[obj] = obj.Visible end
                     pcall(function() obj.Visible=false end)
                 end
@@ -1780,13 +1879,13 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V27: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
+-- STAMINA V28: DIAGNÓSTICO DIRECIONADO E ALTERAÇÃO LOCAL LIMITADA
 --==============================================================
 
 local staminaOriginals = {}
 local function isStaminaName(name)
     return contains(name,{
-        "stamina","sprint","energy","energia",
+        "stamina","sprint","holdendstamina","energy","energia",
         "resist","endurance","folego","fôlego"
     })
 end
@@ -1919,11 +2018,68 @@ local function setAutoFarm(enabled)
 end
 
 --==============================================================
+-- ASSISTENTE A | CONTROLADOR CENTRAL
+--==============================================================
+
+local function setAssistant(enabled)
+    states.AssistantA=enabled==true
+    if states.AssistantA then
+        states.DataCollector=true
+        if toggleDrawers.DataCollector then toggleDrawers.DataCollector(true) end
+        statusLabel.Text="Assistente A ativa: iniciando observação prioritária..."
+        for _,plr in ipairs(Players:GetPlayers()) do
+            if roleSnapshot then roleSnapshot(plr,"AssistantAStarted") end
+        end
+        watchFlashRoot(Lighting)
+        watchFlashRoot(PlayerGui)
+        watchFlashRoot(player.Character)
+        watchFlashRoot(Workspace.CurrentCamera)
+        discoverExistingEntities()
+        setAntiFlash(true)
+        if toggleDrawers.AntiFlash then toggleDrawers.AntiFlash(true) end
+        inspectFlashRoot(Lighting)
+        inspectFlashRoot(PlayerGui)
+        inspectFlashRoot(player.Character)
+        inspectFlashRoot(Workspace.CurrentCamera)
+        if assistantTargetedScan then assistantTargetedScan("AssistantAStarted") end
+        flushReports()
+        statusLabel.Text="Assistente A ativa | Coleta seletiva prioritária ligada | Módulos liberados"
+    else
+        -- Desliga os módulos dependentes e restaura o que foi alterado localmente.
+        states.DataCollector=false
+        if toggleDrawers.DataCollector then toggleDrawers.DataCollector(false) end
+        for rarity in pairs(rarityEnabled) do
+            rarityEnabled[rarity]=false
+            local draw=toggleDrawers["rarity:"..rarity]
+            if draw then draw(false) end
+        end
+        states.ESPPlayers=false; states.ESPMonsters=false; states.ESPDucts=false
+        states.RemoveDoors=false; states.InstantCollection=false; states.Brightness=false
+        states.AntiFlash=false; states.AutoFarm=false; states.InfiniteStamina=false
+        if toggleDrawers.ESPPlayers then toggleDrawers.ESPPlayers(false) end
+        if toggleDrawers.ESPMonsters then toggleDrawers.ESPMonsters(false) end
+        if toggleDrawers.ESPDucts then toggleDrawers.ESPDucts(false) end
+        if toggleDrawers.RemoveDoors then toggleDrawers.RemoveDoors(false) end
+        if toggleDrawers.InstantCollection then toggleDrawers.InstantCollection(false) end
+        if toggleDrawers.Brightness then toggleDrawers.Brightness(false) end
+        if toggleDrawers.AntiFlash then toggleDrawers.AntiFlash(false) end
+        if toggleDrawers.AutoFarm then toggleDrawers.AutoFarm(false) end
+        if toggleDrawers.InfiniteStamina then toggleDrawers.InfiniteStamina(false) end
+        setESP("ESPPlayers",false); setESP("ESPMonsters",false); setESP("ESPDucts",false)
+        setDoors(false); setInstant(false); setBrightness(false); setAntiFlash(false)
+        setAutoFarm(false); setInfiniteStamina(false)
+        clearESP()
+        statusLabel.Text="Assistente A desligada | Todos os módulos subordinados foram bloqueados e desligados"
+        showPage("Principal")
+    end
+end
+
+--==============================================================
 -- INTERFACE
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV27"
+gui.Name = "RoubeOuMorraV28"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -1952,7 +2108,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V27  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V28  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -2029,6 +2185,10 @@ local function makePage(name)
 end
 
 showPage = function(name)
+    if name~="Principal" and not states.AssistantA then
+        name="Principal"
+        if statusLabel then statusLabel.Text="Ative a Assistente A na página Principal para liberar os módulos." end
+    end
     for n,p in pairs(pages) do p.Visible=n==name end
 
     for n,b in pairs(pageButtons) do
@@ -2051,7 +2211,7 @@ local function addSection(page,textValue)
     Instance.new("UICorner",label).CornerRadius = UDim.new(0,5)
 end
 
-local function addButton(page,textValue,callback)
+local function addButton(page,textValue,callback,allowWithoutAssistant)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(1,-6,0,34)
     b.BackgroundColor3 = Color3.fromRGB(43,43,50)
@@ -2061,11 +2221,17 @@ local function addButton(page,textValue,callback)
     b.Font = Enum.Font.Gotham
     b.Parent = page
     Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
-    b.MouseButton1Click:Connect(callback)
+    b.MouseButton1Click:Connect(function()
+        if not states.AssistantA and not allowWithoutAssistant then
+            if statusLabel then statusLabel.Text="Assistente A desligada: módulo bloqueado." end
+            return
+        end
+        if callback then callback() end
+    end)
     return b
 end
 
-local function addToggle(page,name,key,callback,targetTable)
+local function addToggle(page,name,key,callback,targetTable,allowWithoutAssistant)
     targetTable = targetTable or states
 
     local b = Instance.new("TextButton")
@@ -2112,8 +2278,13 @@ local function addToggle(page,name,key,callback,targetTable)
     end
 
     draw(targetTable[key]==true)
+    toggleDrawers[targetTable==states and key or ("rarity:"..key)]=draw
 
     b.MouseButton1Click:Connect(function()
+        if not states.AssistantA and not allowWithoutAssistant then
+            if statusLabel then statusLabel.Text="Assistente A desligada: ative-a na página Principal." end
+            return
+        end
         local nextState = not targetTable[key]
         targetTable[key] = nextState
         draw(nextState)
@@ -2121,7 +2292,7 @@ local function addToggle(page,name,key,callback,targetTable)
         if callback then
             local ok,err = pcall(callback,nextState)
             if not ok then
-                warn("[V27] "..name..": "..tostring(err))
+                warn("[V28] "..name..": "..tostring(err))
                 if statusLabel then
                     statusLabel.Text = "Erro em "..name..": "..tostring(err)
                 end
@@ -2142,7 +2313,14 @@ local function addNav(name)
     b.TextSize = 12
     b.Parent = sidebar
     Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
-    b.MouseButton1Click:Connect(function() showPage(name) end)
+    b.MouseButton1Click:Connect(function()
+        if name~="Principal" and not states.AssistantA then
+            if statusLabel then statusLabel.Text="Ative a Assistente A para liberar as categorias." end
+            showPage("Principal")
+            return
+        end
+        showPage(name)
+    end)
     pageButtons[name] = b
 end
 
@@ -2159,10 +2337,21 @@ for _,name in ipairs({
     addNav(name)
 end
 
--- PRINCIPAL
-addSection(pMain,"ROUBE OU MORRA V27 | Feito por Tales")
-addButton(pMain,"Painel atualizado | Feito por Tales",function() end)
-addButton(pMain,"Acesse as categorias ao lado para configurar os recursos",function() end)
+-- PRINCIPAL: a Assistente A é a única opção desta página.
+addSection(pMain,"CENTRAL DE CONTROLE | ASSISTENTE A")
+addToggle(pMain,"Assistente A — controle central e coleta inteligente","AssistantA",function(v)
+    setAssistant(v)
+end,states,true)
+local assistantInfo=Instance.new("TextLabel")
+assistantInfo.Size=UDim2.new(1,-8,0,88)
+assistantInfo.BackgroundTransparency=1
+assistantInfo.TextColor3=Color3.fromRGB(215,215,225)
+assistantInfo.TextWrapped=true
+assistantInfo.TextYAlignment=Enum.TextYAlignment.Top
+assistantInfo.Font=Enum.Font.Gotham
+assistantInfo.TextSize=12
+assistantInfo.Text="Quando ativada, coordena a coleta seletiva, análise de stamina, classificação de jogadores/entidades, Anti-Flash e módulos de desempenho. As demais categorias ficam bloqueadas enquanto estiver desligada."
+assistantInfo.Parent=pMain
 
 -- ESP
 addSection(pESP,"ESP DE JOGADORES E ENTIDADES")
@@ -2193,11 +2382,17 @@ addToggle(pCollect,"Stamina Infinita (experimental - depende de valor local aces
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V27: estamina, entidades, ferramentas, projéteis e clarões",function()
+addButton(pData,"V28: estamina, entidades, ferramentas, projéteis e clarões",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
 addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
+    if states.AssistantA and not enabled then
+        states.DataCollector=true
+        if toggleDrawers.DataCollector then toggleDrawers.DataCollector(true) end
+        statusLabel.Text="A coleta prioritária é coordenada pela Assistente A e permanece ativa enquanto ela estiver ligada."
+        return
+    end
     if enabled then
         statusLabel.Text = "Iniciando coleta direcionada..."
         watchFlashRoot(Lighting)
@@ -2315,7 +2510,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V27",
+        "DIAGNÓSTICO DE STAMINA V28",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -2329,7 +2524,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     for _,obj in ipairs(found) do
         table.insert(lines,obj:GetFullName().." ["..obj.ClassName.."]")
         local attrs=obj:GetAttributes()
-        for _,key in ipairs({"UpgradeStamina","UpgradeSprint","Skills","Stamina","CurrentStamina","SprintStamina","Energy"}) do
+        for _,key in ipairs({"UpgradeStamina","UpgradeSprint","Skills","Stamina","CurrentStamina","SprintStamina","HoldEndStamina","Energy"}) do
             if attrs[key]~=nil then
                 table.insert(lines,"  "..key.." = "..tostring(attrs[key]))
             end
@@ -2355,7 +2550,7 @@ end)
 
 addButton(pConfig,"FECHAR PAINEL",function()
     gui:Destroy()
-end)
+end,true)
 
 -- Padronização tipográfica: evita mistura de fontes, RichText inesperado e cortes
 -- inconsistentes nos rótulos/controles, inclusive no botão de minimizar.
