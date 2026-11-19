@@ -1,9 +1,9 @@
 --==============================================================
--- ROUBE OU MORRA V37 | Feito por Tales
--- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash preservado | V37: Assistente IA com impulso vertical calculado pela altura e detecção ampliada
--- Resistência (barra fina) registrada apenas como referência visual separada
--- Limites defensivos para desempenho mobile e tipografia padronizada | V37: correção JumpPower=0
+-- ROUBE OU MORRA V38 | Feito por Tales
+-- ESP incremental com limite de renderizaÃ§Ã£o | ClassificaÃ§Ã£o rigorosa de entidades
+-- Anti-Flash preservado | V38: Assistente IA com filtro de dutos/paredes, confirmaÃ§Ã£o de movimento e retentativas limitadas
+-- ResistÃªncia (barra fina) registrada apenas como referÃªncia visual separada
+-- Limites defensivos para desempenho mobile e tipografia padronizada | V38: correÃ§Ã£o de falsos positivos em paredes/dutos e ocultaÃ§Ã£o local reforÃ§ada
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -17,7 +17,7 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV33","RoubeOuMorraV34","RoubeOuMorraV35","RoubeOuMorraV36","RoubeOuMorraV37"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV33","RoubeOuMorraV34","RoubeOuMorraV35","RoubeOuMorraV36","RoubeOuMorraV37","RoubeOuMorraV38"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -68,10 +68,12 @@ local previousV31ESPFolder = Workspace:FindFirstChild("TalesESP_V31_Folder")
 if previousV31ESPFolder then previousV31ESPFolder:Destroy() end
 local previousV36ESPFolder = Workspace:FindFirstChild("TalesESP_V36_Folder")
 if previousV36ESPFolder then previousV36ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V37_Folder")
+local previousV37ESPFolder = Workspace:FindFirstChild("TalesESP_V37_Folder")
+if previousV37ESPFolder then previousV37ESPFolder:Destroy() end
+local espFolder = Workspace:FindFirstChild("TalesESP_V38_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V37_Folder"
+    espFolder.Name = "TalesESP_V38_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -104,8 +106,8 @@ local espBusy = false
 local espGeneration = 0
 local espCandidateList,espCandidateSet = {},setmetatable({}, {__mode="k"})
 local espCacheBuilt = false
--- Limites defensivos para manter o ESP utilizável em dispositivos móveis.
--- Alvos muito distantes não recebem Highlight/label; o cache continua incremental.
+-- Limites defensivos para manter o ESP utilizÃ¡vel em dispositivos mÃ³veis.
+-- Alvos muito distantes nÃ£o recebem Highlight/label; o cache continua incremental.
 local MAX_ESP_OBJECTS = 90
 local MAX_ESP_DISTANCE = 450
 local farmGeneration = 0
@@ -155,7 +157,7 @@ end)
 local function getPlayerFromModel(model)
     local owner=characterOwners[model]
     if owner and owner.Parent==Players then return owner end
-    -- Fallback raro para personagens que já existiam antes da conexão.
+    -- Fallback raro para personagens que jÃ¡ existiam antes da conexÃ£o.
     for _,plr in ipairs(Players:GetPlayers()) do
         if plr.Character==model then
             characterOwners[model]=plr
@@ -197,10 +199,10 @@ local function isMonster(model)
     if not model or not model:IsA("Model") then return false end
 
     local owner=getPlayerFromModel(model)
-    -- Para personagens de jogadores, não usamos nome, texto genérico, classe ou
-    -- atributos de estado isolados. Exigimos uma marca explícita de entidade.
+    -- Para personagens de jogadores, nÃ£o usamos nome, texto genÃ©rico, classe ou
+    -- atributos de estado isolados. Exigimos uma marca explÃ­cita de entidade.
     if owner then
-        -- Em personagem de Player, seleção de entidade/loadout nunca prova transformação.
+        -- Em personagem de Player, seleÃ§Ã£o de entidade/loadout nunca prova transformaÃ§Ã£o.
         -- Exigimos marcador booleano de estado atual no Character ou no Player.
         local function truthy(value)
             if value==true or value==1 then return true end
@@ -222,8 +224,8 @@ local function isMonster(model)
             return false
         end
         if currentFlag(model) or currentFlag(owner) then return true end
-        -- EntityKind/EntityType no Character são aceitos como estado efetivo replicado;
-        -- EntitySelected no Player é deliberadamente ignorado.
+        -- EntityKind/EntityType no Character sÃ£o aceitos como estado efetivo replicado;
+        -- EntitySelected no Player Ã© deliberadamente ignorado.
         for _,key in ipairs({"EntityKind","EntityType","CurrentEntityKind"}) do
             if normalizedEntityKind(model:GetAttribute(key)) then return true end
         end
@@ -250,8 +252,8 @@ local function isMonster(model)
 
     if contains(model.Name,monsterNames) then return true end
 
-    -- Sem GetDescendants() aqui: a classificação precisa ser barata por chamada.
-    -- Marcadores ValueBase relevantes são observados separadamente pelo coletor.
+    -- Sem GetDescendants() aqui: a classificaÃ§Ã£o precisa ser barata por chamada.
+    -- Marcadores ValueBase relevantes sÃ£o observados separadamente pelo coletor.
     return false
 end
 
@@ -367,8 +369,8 @@ local function createESP(obj,color,textValue,small)
     bill.TextLabel.TextColor3 = color
 end
 
--- Identifica somente o próprio objeto duto, não qualquer peça
--- que esteja próxima ou seja descendente dele.
+-- Identifica somente o prÃ³prio objeto duto, nÃ£o qualquer peÃ§a
+-- que esteja prÃ³xima ou seja descendente dele.
 local function isDuctRoot(obj)
     if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then
         return false
@@ -409,7 +411,7 @@ local function registerESPCandidate(obj)
         local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
         eligible=isPlayerModel or hasHumanoid or isMonster(obj)
     elseif obj:IsA("BasePart") then
-        -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
+        -- NÃ£o guardar cada peÃ§a do mapa: somente dutos e itens com raridade explÃ­cita.
         eligible=isDuctRoot(obj) or getRarity(obj)~=nil
     end
     if eligible then
@@ -421,7 +423,7 @@ end
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
-    -- Uma varredura inicial única; atualizações seguintes são incrementais.
+    -- Uma varredura inicial Ãºnica; atualizaÃ§Ãµes seguintes sÃ£o incrementais.
     for index,obj in ipairs(Workspace:GetDescendants()) do
         registerESPCandidate(obj)
         if index%350==0 then task.wait() end
@@ -754,7 +756,7 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- COLETA INSTANTÂNEA
+-- COLETA INSTANTÃ‚NEA
 --==============================================================
 
 local function setInstant(enabled)
@@ -802,14 +804,14 @@ local function assistantReportIsRelevant(entry)
     local path=string.lower(tostring(entry.Path or ""))
     local blob=event.." "..name.." "..path
 
-    -- Assistente IA mantém a coleta seletiva, agora cobrindo stamina, movimento,
-    -- obstáculos, pulo, visibilidade e observações de monstros/alvos.
+    -- Assistente IA mantÃ©m a coleta seletiva, agora cobrindo stamina, movimento,
+    -- obstÃ¡culos, pulo, visibilidade e observaÃ§Ãµes de monstros/alvos.
     if event=="localnumericcandidatesnapshot" or event=="staminacontext"
         or event=="staminahudtreesample" or event=="staminahudsample"
         or event=="movementobstaclesnapshot" or event=="jumpstatesample"
         or event=="visibilitystatesample" or event=="monstertargetobservation" then return true end
-    if contains(blob,{"stamina","sprint","holdendstamina","energy","endurance","folego","fôlego",
-        "jump","pulo","obstacle","obstaculo","obstáculo","collision","colisao","colisão",
+    if contains(blob,{"stamina","sprint","holdendstamina","energy","endurance","folego","fÃ´lego",
+        "jump","pulo","obstacle","obstaculo","obstÃ¡culo","collision","colisao","colisÃ£o",
         "raycast","humanoidstate","jumpheight","jumppower","invisible","invisibility","stealth",
         "visibility","visible","target","aggro","detection","detect","sight","vision","monster","monstro"}) then return true end
     return false
@@ -817,11 +819,11 @@ end
 
 local function queueReport(entry,key)
     if not states.DataCollector then return end
-    -- Assistente IA mantém a coleta seletiva para os sistemas investigados.
+    -- Assistente IA mantÃ©m a coleta seletiva para os sistemas investigados.
     if states.AssistantIA and not assistantReportIsRelevant(entry) then return end
 
-    -- A mesma instância pode mudar de estado; cada versão do conteúdo recebe
-    -- uma chave própria, em vez de bloquear para sempre pelo caminho.
+    -- A mesma instÃ¢ncia pode mudar de estado; cada versÃ£o do conteÃºdo recebe
+    -- uma chave prÃ³pria, em vez de bloquear para sempre pelo caminho.
     local versionedKey = tostring(key).."|"..reportFingerprint(entry)
     if sentKeys[versionedKey] or queuedKeys[versionedKey] then return end
 
@@ -871,14 +873,14 @@ local function sendOne(item)
         return true,"HTTP "..code
     end
 
-    if code==409 then return true,"Registro já existente" end
+    if code==409 then return true,"Registro jÃ¡ existente" end
 
     if code==401 or code==403 then
         return false,"Token recusado (HTTP "..code..")"
     elseif code==404 then
-        return false,"Função ingest-report não encontrada (404)"
+        return false,"FunÃ§Ã£o ingest-report nÃ£o encontrada (404)"
     elseif code==429 then
-        return false,"Limite de requisições (429)"
+        return false,"Limite de requisiÃ§Ãµes (429)"
     elseif code>=500 then
         return false,"Supabase HTTP "..code..": "..responseBody
     end
@@ -894,7 +896,7 @@ local function flushReports()
         return
     end
     if COLLECTOR_TOKEN=="" then
-        lastHTTP = "Token não informado"
+        lastHTTP = "Token nÃ£o informado"
         if statusLabel then statusLabel.Text=lastHTTP end
         return
     end
@@ -1204,7 +1206,7 @@ local function staminaSnapshot(reason)
         data.PlayerAttributes[k]=tostring(val)
         if type(val)=="number" then
             table.insert(numericAttributeCandidates,{Owner="Player",Name=k,Value=val,
-                NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fôlego"})})
+                NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fÃ´lego"})})
         end
     end
     if char then
@@ -1212,7 +1214,7 @@ local function staminaSnapshot(reason)
             data.CharacterAttributes[k]=tostring(val)
             if type(val)=="number" then
                 table.insert(numericAttributeCandidates,{Owner="Character",Name=k,Value=val,
-                    NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fôlego"})})
+                    NameSuggestsStamina=contains(k,{"stamina","sprint","energy","folego","fÃ´lego"})})
             end
         end
         local hum=char:FindFirstChildOfClass("Humanoid")
@@ -1225,7 +1227,7 @@ local function staminaSnapshot(reason)
         local statValues={}
         local function isStaminaCandidate(obj)
             return obj and obj:IsA("ValueBase") and contains(obj.Name,{
-                "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fôlego"
+                "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fÃ´lego"
             })
         end
         for _,obj in ipairs(char:GetDescendants()) do
@@ -1246,9 +1248,9 @@ local function staminaSnapshot(reason)
         data.CharacterValues=statValues
     end
 
-    -- V37: procura valores numéricos locais mesmo quando o nome não contém
+    -- V37: procura valores numÃ©ricos locais mesmo quando o nome nÃ£o contÃ©m
     -- "stamina". Isso permite correlacionar os valores com correr/parar.
-    -- A resistência (barra fina) é tratada como recurso distinto, não como estamina.
+    -- A resistÃªncia (barra fina) Ã© tratada como recurso distinto, nÃ£o como estamina.
     if now-lastNumericCandidateSample>=2 then
         lastNumericCandidateSample=now
         local roots={}
@@ -1280,7 +1282,7 @@ local function staminaSnapshot(reason)
                         table.insert(candidates,{
                             Name=obj.Name,Class=obj.ClassName,Path=safePath(obj),
                             Value=value,ValueString=tostring(value),
-                            NameSuggestsStamina=contains(obj.Name,{"stamina","sprint","energy","folego","fôlego"}),
+                            NameSuggestsStamina=contains(obj.Name,{"stamina","sprint","energy","folego","fÃ´lego"}),
                             NameSuggestsResistance=contains(obj.Name,{"resist","endurance"})
                         })
                     end
@@ -1298,7 +1300,7 @@ local function staminaSnapshot(reason)
     end
 
     -- A barra pode ser apenas visual. Durante corrida/parada, compara alguns
-    -- elementos de HUD e relata mudanças de tamanho/cor/texto sem assumir nomes.
+    -- elementos de HUD e relata mudanÃ§as de tamanho/cor/texto sem assumir nomes.
     if reason=="Running" or reason=="Stopped" then
         if now-lastHudSample>=1.5 then
             lastHudSample=now
@@ -1362,7 +1364,7 @@ local function watchStatObject(obj,source)
     if not obj or not obj:IsA("ValueBase") or watchedStats[obj] then return end
     local isNumeric=obj:IsA("NumberValue") or obj:IsA("IntValue")
     local staminaNamed=contains(obj.Name,{
-        "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fôlego"
+        "stamina","sprint","holdendstamina","energy","resist","endurance","folego","fÃ´lego"
     })
     local roleNamed=contains(obj.Name,{
         "role","entity","monster","enemy","team","class","type","flash"
@@ -1435,7 +1437,7 @@ roleSnapshot = function(plr,reason)
     if states.DataCollector then task.defer(flushReports) end
 end
 
--- Varredura coordenada pela Assistente IA: não percorre Workspace inteiro nem captura
+-- Varredura coordenada pela Assistente IA: nÃ£o percorre Workspace inteiro nem captura
 -- todos os GuiObjects/BaseParts. Prioriza estados de jogadores e amostras de stamina.
 assistantTargetedScan = function(reason)
     scanCount += 1
@@ -1618,7 +1620,7 @@ end
 local function discoverExistingEntities()
     if entityDiscoveryDone then return end
     entityDiscoveryDone=true
-    -- Percorre apenas contêineres e Models: não inspeciona cada peça/objeto do mapa.
+    -- Percorre apenas contÃªineres e Models: nÃ£o inspeciona cada peÃ§a/objeto do mapa.
     local visited=0
     local lastYield=0
     local function walk(container,depth)
@@ -1652,8 +1654,8 @@ Workspace.DescendantAdded:Connect(function(obj)
 
     if obj:IsA("Tool") then watchTool(obj) end
 
-    -- Sem depender do nome: objetos que surgem logo após ativar uma ferramenta
-    -- são candidatos a projétil/artefato lançado. Limite evita capturar o mapa inteiro.
+    -- Sem depender do nome: objetos que surgem logo apÃ³s ativar uma ferramenta
+    -- sÃ£o candidatos a projÃ©til/artefato lanÃ§ado. Limite evita capturar o mapa inteiro.
     if states.DataCollector and os.clock()<=recentToolUseUntil
         and recentToolSpawnCount<24
         and (obj:IsA("Model") or obj:IsA("BasePart")) then
@@ -1663,14 +1665,14 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 --==============================================================
--- RELATÓRIO MANUAL INTEGRAL
+-- RELATÃ“RIO MANUAL INTEGRAL
 --==============================================================
 
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V37 - RELATORIO",
-        "Investigação focada de estamina e candidatos numéricos locais",
+        "ROUBE OU MORRA V38 - RELATORIO",
+        "InvestigaÃ§Ã£o focada de estamina e candidatos numÃ©ricos locais",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
         "Tempo de coleta: "..math.floor(os.clock()-startTime).." segundos",
@@ -1717,11 +1719,11 @@ local function copyFullReport()
     if showPage then showPage("Dados") end
 
     if statusLabel then
-        statusLabel.Text = "Gerando relatório completo..."
+        statusLabel.Text = "Gerando relatÃ³rio completo..."
     end
 
     task.spawn(function()
-        -- Se ainda não existe nenhum registro, faz uma coleta manual.
+        -- Se ainda nÃ£o existe nenhum registro, faz uma coleta manual.
         if #records==0 then
             scanGame()
         end
@@ -1747,20 +1749,20 @@ local function copyFullReport()
             if ok then
                 if statusLabel then
                     statusLabel.Text =
-                        "Relatório copiado! "
+                        "RelatÃ³rio copiado! "
                         ..#full.." caracteres | "
                         ..#records.." registros"
                 end
             else
                 if statusLabel then
                     statusLabel.Text =
-                        "Relatório exibido abaixo. Clipboard: "..tostring(err)
+                        "RelatÃ³rio exibido abaixo. Clipboard: "..tostring(err)
                 end
             end
         else
             if statusLabel then
                 statusLabel.Text =
-                    "Relatório exibido abaixo. Selecione o texto para copiar."
+                    "RelatÃ³rio exibido abaixo. Selecione o texto para copiar."
             end
         end
     end)
@@ -1805,7 +1807,7 @@ local function effectLooksLikeFlash(obj)
     local name=string.lower(tostring(obj.Name or ""))
     if name=="flashblur" or name=="flashburn" then return true end
     return contains(name,{
-        "flash","blind","flashbang","clarão",
+        "flash","blind","flashbang","clarÃ£o",
         "stunflash","whiteout","flash_effect","blindness",
         "flashblur","flashburn"
     })
@@ -2021,20 +2023,20 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --==============================================================
--- STAMINA V37: COLETA FOCADA EM VALORES NUMÉRICOS LOCAIS
+-- STAMINA V37: COLETA FOCADA EM VALORES NUMÃ‰RICOS LOCAIS
 --==============================================================
 
 local staminaOriginals = {}
 local function isStaminaName(name)
     return contains(name,{
         "stamina","sprint","holdendstamina","energy","energia",
-        "resist","endurance","folego","fôlego"
+        "resist","endurance","folego","fÃ´lego"
     })
 end
 
 local function isWritableStaminaValue(name)
     local normalized=string.lower(tostring(name or "")):gsub("[%s_%-]","")
-    -- Não confundir UpgradeStamina/UpgradeSprint com a barra atual.
+    -- NÃ£o confundir UpgradeStamina/UpgradeSprint com a barra atual.
     return normalized=="stamina" or normalized=="currentstamina"
         or normalized=="staminacurrent" or normalized=="staminavalue"
         or normalized=="sprintstamina" or normalized=="currentsprintstamina"
@@ -2069,9 +2071,9 @@ local function findStaminaObjects()
             if candidate and not seen[obj] then
                 seen[obj]=true
                 table.insert(found,obj)
-                -- Só altera valores locais com nome de stamina ATUAL conhecido.
-                -- UpgradeStamina/UpgradeSprint são níveis, não a barra de energia.
-                -- Não faz require() nem modifica upvalues de módulos desconhecidos.
+                -- SÃ³ altera valores locais com nome de stamina ATUAL conhecido.
+                -- UpgradeStamina/UpgradeSprint sÃ£o nÃ­veis, nÃ£o a barra de energia.
+                -- NÃ£o faz require() nem modifica upvalues de mÃ³dulos desconhecidos.
                 if states.InfiniteStamina and isWritableStaminaValue(obj.Name)
                     and (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
                     if staminaOriginals[obj]==nil then staminaOriginals[obj]=obj.Value end
@@ -2082,8 +2084,8 @@ local function findStaminaObjects()
     end
     local hud=PlayerGui:FindFirstChild("StaminaHUD")
     if hud and not seen[hud] then table.insert(found,hud) end
-    -- O relatório identificou a barra visual exata. Ela é observada, nunca
-    -- forçada para 100%, pois pode ser apenas apresentação do valor do servidor.
+    -- O relatÃ³rio identificou a barra visual exata. Ela Ã© observada, nunca
+    -- forÃ§ada para 100%, pois pode ser apenas apresentaÃ§Ã£o do valor do servidor.
     if hud then
         local frame=hud:FindFirstChild("Frame")
         local fill=frame and frame:FindFirstChild("Frame")
@@ -2116,13 +2118,15 @@ local function setInfiniteStamina(enabled)
 end
 
 --==============================================================
--- V37 | ASSISTENTE IA: PULO ADAPTATIVO POR ALTURA E OCULTAÇÃO VISUAL COMPLETA LOCAL
+-- V38 | ASSISTENTE IA: FILTROS DE DUTO/PAREDE, PULO ADAPTATIVO E OCULTAÃ‡ÃƒO VISUAL LOCAL
 --==============================================================
 local autoJumpGeneration=0
 local lastAutoJumpAt=0
 local lastMovementReportAt=0
 local savedLocalTransparency=setmetatable({}, {__mode="k"})
+local savedBaseTransparency=setmetatable({}, {__mode="k"})
 local savedVisualEnabled=setmetatable({}, {__mode="k"})
+local savedHumanoidDisplay=setmetatable({}, {__mode="k"})
 local invisibleDescendantConnection=nil
 
 movementAndVisibilitySnapshot = function(reason)
@@ -2174,12 +2178,23 @@ local function applyLocalInvisibleToObject(obj,enabled)
     if not obj then return end
     if obj:IsA("BasePart") then
         if enabled then
-            if savedLocalTransparency[obj]==nil then savedLocalTransparency[obj]=obj.LocalTransparencyModifier end
-            pcall(function() obj.LocalTransparencyModifier=1 end)
+            if savedLocalTransparency[obj]==nil then
+                savedLocalTransparency[obj]=obj.LocalTransparencyModifier
+            end
+            if savedBaseTransparency[obj]==nil then
+                savedBaseTransparency[obj]=obj.Transparency
+            end
+            pcall(function()
+                obj.LocalTransparencyModifier=1
+                obj.Transparency=1
+            end)
         else
-            local old=savedLocalTransparency[obj]
-            if old~=nil then pcall(function() obj.LocalTransparencyModifier=old end) end
+            local oldLocal=savedLocalTransparency[obj]
+            local oldTransparency=savedBaseTransparency[obj]
+            if oldLocal~=nil then pcall(function() obj.LocalTransparencyModifier=oldLocal end) end
+            if oldTransparency~=nil then pcall(function() obj.Transparency=oldTransparency end) end
             savedLocalTransparency[obj]=nil
+            savedBaseTransparency[obj]=nil
         end
     elseif obj:IsA("Decal") or obj:IsA("Texture") then
         if enabled then
@@ -2190,16 +2205,9 @@ local function applyLocalInvisibleToObject(obj,enabled)
             if old~=nil then pcall(function() obj.Transparency=old end) end
             savedLocalTransparency[obj]=nil
         end
-    elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
-        if enabled then
-            if savedVisualEnabled[obj]==nil then savedVisualEnabled[obj]=obj.Enabled end
-            pcall(function() obj.Enabled=false end)
-        else
-            local old=savedVisualEnabled[obj]
-            if old~=nil then pcall(function() obj.Enabled=old end) end
-            savedVisualEnabled[obj]=nil
-        end
-    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+    elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam")
+        or obj:IsA("BillboardGui") or obj:IsA("SurfaceGui")
+        or obj:IsA("Highlight") then
         if enabled then
             if savedVisualEnabled[obj]==nil then savedVisualEnabled[obj]=obj.Enabled end
             pcall(function() obj.Enabled=false end)
@@ -2220,12 +2228,48 @@ local function setPlayerInvisible(enabled)
     end
     if not char then return end
 
+    local hum=char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if states.PlayerInvisible then
+            if savedHumanoidDisplay[hum]==nil then
+                savedHumanoidDisplay[hum]=hum.DisplayDistanceType
+            end
+            pcall(function()
+                hum.DisplayDistanceType=Enum.HumanoidDisplayDistanceType.None
+                hum.NameDisplayDistance=0
+                hum.HealthDisplayDistance=0
+            end)
+        else
+            local old=savedHumanoidDisplay[hum]
+            if old~=nil then pcall(function() hum.DisplayDistanceType=old end) end
+            savedHumanoidDisplay[hum]=nil
+        end
+    end
+
     for _,obj in ipairs(char:GetDescendants()) do
         applyLocalInvisibleToObject(obj,states.PlayerInvisible)
     end
     if states.PlayerInvisible then
         invisibleDescendantConnection=char.DescendantAdded:Connect(function(obj)
             if states.PlayerInvisible then applyLocalInvisibleToObject(obj,true) end
+        end)
+        -- Alguns scripts do jogo reescrevem Transparency durante animaÃ§Ãµes/equipamentos.
+        -- Reaplica a ocultaÃ§Ã£o em intervalos curtos, sem fazer trabalho por frame.
+        task.spawn(function()
+            while states.PlayerInvisible and player.Character==char and char.Parent do
+                for _,obj in ipairs(char:GetDescendants()) do
+                    applyLocalInvisibleToObject(obj,true)
+                end
+                local currentHum=char:FindFirstChildOfClass("Humanoid")
+                if currentHum then
+                    pcall(function()
+                        currentHum.DisplayDistanceType=Enum.HumanoidDisplayDistanceType.None
+                        currentHum.NameDisplayDistance=0
+                        currentHum.HealthDisplayDistance=0
+                    end)
+                end
+                task.wait(0.3)
+            end
         end)
     end
     if states.DataCollector then
@@ -2252,6 +2296,46 @@ local function isCharacterPart(part,localCharacter)
     return part:IsDescendantOf(localCharacter)
 end
 
+local function isDuctRelated(part)
+    local current=part
+    for _=1,12 do
+        if not current or current==Workspace then break end
+        if isDuctRoot(current) or contains(current.Name,{"ventinside","vententrance","ventcorner","duct","duto","airvent"}) then
+            return true
+        end
+        current=current.Parent
+    end
+    return false
+end
+
+local function isWallLikeObstacle(part)
+    local current=part
+    for _=1,8 do
+        if not current or current==Workspace then break end
+        if contains(current.Name,{"wall","parede","wallpart","side wall"}) then
+            return true
+        end
+        current=current.Parent
+    end
+    local size=part.Size
+    local thinSide=math.min(size.X,size.Z)
+    local longSide=math.max(size.X,size.Z)
+    -- Filtra paredes genÃ©ricas sem bloquear mÃ³veis que tenham volume de subida.
+    return size.Y>=5.5 and thinSide<=1.5 and longSide>=5.5
+end
+
+local function getObstacleContainer(part)
+    local current=part.Parent
+    while current and current~=Workspace do
+        if current:IsA("Model") and not current:FindFirstChildOfClass("Humanoid")
+            and not contains(current.Name,{"activemap","workspace","maproot"}) then
+            return current
+        end
+        current=current.Parent
+    end
+    return part
+end
+
 local function setAutoJump(enabled)
     states.AutoJump=enabled==true
     autoJumpGeneration+=1
@@ -2266,10 +2350,10 @@ local function setAutoJump(enabled)
         topParams.FilterType=Enum.RaycastFilterType.Include
         topParams.IgnoreWater=true
 
-        -- JumpPower do jogo está replicado como 0 e JumpHeight como 2.
+        -- JumpPower do jogo estÃ¡ replicado como 0 e JumpHeight como 2.
         -- Isso faz a V36 calcular alcance 0 e limitar o salto a um pulinho.
-        -- A V37 calcula o impulso pela altura real do obstáculo, sem usar
-        -- JumpPower=0 como se fosse a capacidade física máxima do personagem.
+        -- A V38 calcula o impulso pela altura real do obstÃ¡culo, sem usar
+        -- JumpPower=0 como se fosse a capacidade fÃ­sica mÃ¡xima do personagem.
         local MAX_ASSIST_OBSTACLE_HEIGHT=14.5
         local MAX_ASSIST_VERTICAL_SPEED=82
         local MIN_ASSIST_VERTICAL_SPEED=38
@@ -2287,26 +2371,25 @@ local function setAutoJump(enabled)
                 local horizontalVelocity=Vector3.new(velocity.X,0,velocity.Z)
                 local directionVector=Vector3.new(move.X,0,move.Z)
 
-                -- Quando o jogador fica travado encostado no móvel, MoveDirection
-                -- pode cair para zero. Nesse caso usa a velocidade e, por último,
-                -- a direção frontal do personagem para continuar a assist\u00eancia.
-                if directionVector.Magnitude<0.12 and horizontalVelocity.Magnitude>0.8 then
+                -- Quando o jogador fica travado encostado no mÃ³vel, MoveDirection
+                -- pode cair para zero. Nesse caso usa a velocidade e, por Ãºltimo,
+                -- a direÃ§Ã£o frontal do personagem para continuar a assist\u00eancia.
+                -- NÃ£o usa a direÃ§Ã£o do olhar quando o jogador estÃ¡ parado:
+                -- isso causava pulos ao apenas encostar/raspar em paredes.
+                if directionVector.Magnitude<0.12 and horizontalVelocity.Magnitude>1.35 then
                     directionVector=horizontalVelocity
-                end
-                if directionVector.Magnitude<0.12 then
-                    local look=root.CFrame.LookVector
-                    directionVector=Vector3.new(look.X,0,look.Z)
                 end
 
                 local grounded=hum.FloorMaterial~=Enum.Material.Air
                     and math.abs(velocity.Y)<10
-                if directionVector.Magnitude>0.12 then
+                local activelyMoving=directionVector.Magnitude>=0.12
+                if activelyMoving then
                     local direction=directionVector.Unit
                     local footY=root.Position.Y-(hum.HipHeight+root.Size.Y*0.5)
-                    -- Raios em várias alturas e dist\u00e2ncias; inclui a região baixa
-                    -- para caixas e a região do tronco para armários/estantes.
-                    local rayHeights={-1.9,-1.0,-0.15,0.7,1.45}
-                    local rayDistances={4.5,6.5}
+                    -- Raios em vÃ¡rias alturas e dist\u00e2ncias; inclui a regiÃ£o baixa
+                    -- para caixas e a regiÃ£o do tronco para armÃ¡rios/estantes.
+                    local rayHeights={-1.75,-0.95,-0.15,0.55}
+                    local rayDistances={3.8,5.8}
                     local bestHit=nil
                     for _,height in ipairs(rayHeights) do
                         for _,distance in ipairs(rayDistances) do
@@ -2314,7 +2397,10 @@ local function setAutoJump(enabled)
                             local hit=Workspace:Raycast(origin,direction*distance,rayParams)
                             if hit and hit.Instance and hit.Instance:IsA("BasePart")
                                 and hit.Instance.CanCollide
-                                and not isCharacterPart(hit.Instance,char) then
+                                and not isCharacterPart(hit.Instance,char)
+                                and not isDuctRelated(hit.Instance)
+                                and not isWallLikeObstacle(hit.Instance)
+                                and direction:Dot(hit.Normal)<-0.12 then
                                 if not bestHit or hit.Distance<bestHit.Distance then
                                     bestHit=hit
                                 end
@@ -2324,16 +2410,28 @@ local function setAutoJump(enabled)
 
                     if bestHit then
                         local obstacle=bestHit.Instance
-                        topParams.FilterDescendantsInstances={obstacle}
+                        local obstacleContainer=getObstacleContainer(obstacle)
+                        -- SeguranÃ§a adicional: se o raycast atingir qualquer peÃ§a do
+                        -- conjunto do duto, nÃ£o tenta saltar dentro da passagem.
+                        if isDuctRelated(obstacleContainer) or isDuctRelated(obstacle) then
+                            bestHit=nil
+                        end
+                        if bestHit then
+                        topParams.FilterDescendantsInstances={obstacleContainer}
+                        local boxCF,boxSize
+                        if obstacleContainer:IsA("Model") then
+                            local ok,cf,size=pcall(function() return obstacleContainer:GetBoundingBox() end)
+                            if ok then boxCF,boxSize=cf,size end
+                        end
                         local topY=nil
-                        local topOrigin=Vector3.new(bestHit.Position.X,
-                            obstacle.Position.Y+getWorldVerticalHalfExtent(obstacle)+10,
-                            bestHit.Position.Z)
+                        local fallbackTop=obstacle.Position.Y+getWorldVerticalHalfExtent(obstacle)
+                        if boxCF and boxSize then
+                            fallbackTop=boxCF.Position.Y+getWorldVerticalHalfExtent({CFrame=boxCF,Size=boxSize})
+                        end
+                        local topOrigin=Vector3.new(bestHit.Position.X,fallbackTop+10,bestHit.Position.Z)
                         local topHit=Workspace:Raycast(topOrigin,Vector3.new(0,-160,0),topParams)
                         if topHit then topY=topHit.Position.Y end
-                        if not topY then
-                            topY=obstacle.Position.Y+getWorldVerticalHalfExtent(obstacle)
-                        end
+                        if not topY then topY=fallbackTop end
 
                         local obstacleHeight=topY-footY
                         local gravity=math.max(Workspace.Gravity,1)
@@ -2346,27 +2444,34 @@ local function setAutoJump(enabled)
                             reportedJumpHeight=configuredJumpHeight
                         end
                         -- O jogo informa JumpPower=0 em 844/844 amostras e
-                        -- JumpHeight=2 na maioria. Esse número não representa
+                        -- JumpHeight=2 na maioria. Esse nÃºmero nÃ£o representa
                         -- o impulso que o cliente consegue aplicar diretamente.
                         local heightValid=obstacleHeight>=0.35
                             and obstacleHeight<=MAX_ASSIST_OBSTACLE_HEIGHT
                         local horizontalSpeed=horizontalVelocity.Magnitude
-                        local triggerDistance=math.clamp(3.4+horizontalSpeed*0.14,3.6,6.2)
+                        local triggerDistance=math.clamp(3.0+horizontalSpeed*0.12,3.2,5.2)
                         local closeEnough=bestHit.Distance<=triggerDistance
 
-                        -- Verifica teto/peça acima do topo; aceita o próprio
-                        -- obstáculo como contato esperado, mas não outro bloqueio.
-                        local clearanceOrigin=Vector3.new(bestHit.Position.X,topY+0.45,bestHit.Position.Z)
-                        local clearanceHit=Workspace:Raycast(clearanceOrigin,direction*2.2,rayParams)
-                        local clearanceOK=clearanceHit==nil or clearanceHit.Instance==obstacle
+                        -- Exige espaÃ§o acima e Ã  frente do topo. Em dutos/locais baixos,
+                        -- a verificaÃ§Ã£o impede a IA de tentar um salto sem altura livre.
+                        local clearanceOrigin=Vector3.new(bestHit.Position.X,topY+0.35,bestHit.Position.Z)
+                        local forwardClearance=Workspace:Raycast(clearanceOrigin,direction*2.0,rayParams)
+                        local overheadClearance=Workspace:Raycast(clearanceOrigin,Vector3.new(0,2.5,0),rayParams)
+                        local forwardIsSameObject=forwardClearance==nil or forwardClearance.Instance==obstacle
+                            if forwardClearance and obstacleContainer:IsA("Model") then
+                                forwardIsSameObject=forwardClearance.Instance:IsDescendantOf(obstacleContainer)
+                            end
+                        local clearanceOK=forwardIsSameObject and overheadClearance==nil
 
                         local readyState=hum:GetState()
                         local canAttempt=readyState~=Enum.HumanoidStateType.Jumping
                             and readyState~=Enum.HumanoidStateType.Freefall
+                        local retryAvailable=(obstacleContainer~=lastObstacle or sameObstacleAttempts<3)
                         local shouldJump=heightValid and closeEnough and clearanceOK
-                            and grounded and canAttempt and os.clock()-lastAutoJumpAt>=0.72
+                            and grounded and activelyMoving and canAttempt and retryAvailable
+                            and os.clock()-lastAutoJumpAt>=0.72
 
-                        -- Energia vertical necessária para ultrapassar o topo com
+                        -- Energia vertical necessÃ¡ria para ultrapassar o topo com
                         -- margem. A V36 usava JumpPower=0 como limite inferior e
                         -- acabava aplicando somente ~32 studs/s (salto de ~2,7 studs).
                         local requiredVelocity=0
@@ -2378,14 +2483,14 @@ local function setAutoJump(enabled)
 
                         if shouldJump then
                             lastAutoJumpAt=os.clock()
-                            if obstacle==lastObstacle then
+                            if obstacleContainer==lastObstacle then
                                 sameObstacleAttempts+=1
                             else
-                                lastObstacle=obstacle
+                                lastObstacle=obstacleContainer
                                 sameObstacleAttempts=1
                             end
-                            -- Preserva X/Z exatamente como estão: evita o impulso
-                            -- horizontal que fazia o avatar ser jogado para trás.
+                            -- Preserva X/Z exatamente como estÃ£o: evita o impulso
+                            -- horizontal que fazia o avatar ser jogado para trÃ¡s.
                             pcall(function()
                                 hum.Jump=true
                                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
@@ -2393,13 +2498,13 @@ local function setAutoJump(enabled)
                                 root.AssemblyLinearVelocity=Vector3.new(
                                     current.X,math.max(current.Y,requiredVelocity),current.Z)
                             end)
-                        elseif bestHit.Distance>triggerDistance+1.0 or obstacle~=lastObstacle then
+                        elseif bestHit.Distance>triggerDistance+1.0 or obstacleContainer~=lastObstacle then
                             lastObstacle=nil
                             sameObstacleAttempts=0
                         end
 
                         if states.DataCollector and (shouldJump or os.clock()-lastMovementReportAt>=0.9) then
-                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V37",
+                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V38",
                                 ObstacleName=obstacle.Name,ObstacleClass=obstacle.ClassName,
                                 ObstaclePath=safePath(obstacle),ObstaclePosition=tostring(bestHit.Position),
                                 ObstacleDistance=bestHit.Distance,ObstacleHeight=obstacleHeight,
@@ -2413,9 +2518,10 @@ local function setAutoJump(enabled)
                                 RetryCount=sameObstacleAttempts,
                                 MaxAssistObstacleHeight=MAX_ASSIST_OBSTACLE_HEIGHT,
                                 CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
-                                "MovementObstacleSnapshotV37|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
+                                "MovementObstacleSnapshotV38|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
                             lastMovementReportAt=os.clock()
                         end
+                        end -- bestHit vÃ¡lido apÃ³s filtros de duto
                     else
                         lastObstacle=nil
                         sameObstacleAttempts=0
@@ -2425,7 +2531,7 @@ local function setAutoJump(enabled)
 
             if states.DataCollector and os.clock()-lastMovementReportAt>=5 then
                 lastMovementReportAt=os.clock()
-                movementAndVisibilitySnapshot("MovementPeriodicV37")
+                movementAndVisibilitySnapshot("MovementPeriodicV38")
             end
             task.wait(0.055)
         end
@@ -2512,7 +2618,7 @@ local function setAssistant(enabled)
     if states.AssistantIA then
         states.DataCollector=true
         if toggleDrawers.DataCollector then toggleDrawers.DataCollector(true) end
-        statusLabel.Text="Assistente IA ativa: iniciando observação e assistência de movimento..."
+        statusLabel.Text="Assistente IA ativa: iniciando observaÃ§Ã£o e assistÃªncia de movimento..."
         setAutoJump(true)
         if toggleDrawers.AutoJump then toggleDrawers.AutoJump(true) end
         for _,plr in ipairs(Players:GetPlayers()) do
@@ -2531,9 +2637,9 @@ local function setAssistant(enabled)
         inspectFlashRoot(Workspace.CurrentCamera)
         if assistantTargetedScan then assistantTargetedScan("AssistantIAStarted") end
         flushReports()
-        statusLabel.Text="Assistente IA ativa | Coleta seletiva e assistência de movimento ligadas | Módulos liberados"
+        statusLabel.Text="Assistente IA ativa | Coleta seletiva e assistÃªncia de movimento ligadas | MÃ³dulos liberados"
     else
-        -- Desliga os módulos dependentes e restaura o que foi alterado localmente.
+        -- Desliga os mÃ³dulos dependentes e restaura o que foi alterado localmente.
         states.DataCollector=false
         if toggleDrawers.DataCollector then toggleDrawers.DataCollector(false) end
         for rarity in pairs(rarityEnabled) do
@@ -2560,7 +2666,7 @@ local function setAssistant(enabled)
         setDoors(false); setInstant(false); setBrightness(false); setAntiFlash(false)
         setAutoFarm(false); setInfiniteStamina(false); setAutoJump(false); setPlayerInvisible(false)
         clearESP()
-        statusLabel.Text="Assistente IA desligada | Todos os módulos subordinados foram bloqueados e desligados"
+        statusLabel.Text="Assistente IA desligada | Todos os mÃ³dulos subordinados foram bloqueados e desligados"
         showPage("Principal")
     end
 end
@@ -2570,7 +2676,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV37"
+gui.Name = "RoubeOuMorraV38"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -2599,7 +2705,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V37  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V38  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -2678,7 +2784,7 @@ end
 showPage = function(name)
     if name~="Principal" and not states.AssistantIA then
         name="Principal"
-        if statusLabel then statusLabel.Text="Ative a Assistente IA na página Principal para liberar os módulos." end
+        if statusLabel then statusLabel.Text="Ative a Assistente IA na pÃ¡gina Principal para liberar os mÃ³dulos." end
     end
     for n,p in pairs(pages) do p.Visible=n==name end
 
@@ -2714,7 +2820,7 @@ local function addButton(page,textValue,callback,allowWithoutAssistant)
     Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
     b.MouseButton1Click:Connect(function()
         if not states.AssistantIA and not allowWithoutAssistant then
-            if statusLabel then statusLabel.Text="Assistente IA desligada: módulo bloqueado." end
+            if statusLabel then statusLabel.Text="Assistente IA desligada: mÃ³dulo bloqueado." end
             return
         end
         if callback then callback() end
@@ -2773,7 +2879,7 @@ local function addToggle(page,name,key,callback,targetTable,allowWithoutAssistan
 
     b.MouseButton1Click:Connect(function()
         if not states.AssistantIA and not allowWithoutAssistant then
-            if statusLabel then statusLabel.Text="Assistente IA desligada: ative-a na página Principal." end
+            if statusLabel then statusLabel.Text="Assistente IA desligada: ative-a na pÃ¡gina Principal." end
             return
         end
         local nextState = not targetTable[key]
@@ -2820,17 +2926,17 @@ local pESP = makePage("ESP")
 local pEnv = makePage("Ambiente")
 local pCollect = makePage("Coleta")
 local pData = makePage("Dados")
-local pConfig = makePage("Configurações")
+local pConfig = makePage("ConfiguraÃ§Ãµes")
 
 for _,name in ipairs({
-    "Principal","ESP","Ambiente","Coleta","Dados","Configurações"
+    "Principal","ESP","Ambiente","Coleta","Dados","ConfiguraÃ§Ãµes"
 }) do
     addNav(name)
 end
 
--- PRINCIPAL: a Assistente IA é a única opção desta página.
+-- PRINCIPAL: a Assistente IA Ã© a Ãºnica opÃ§Ã£o desta pÃ¡gina.
 addSection(pMain,"CENTRAL DE CONTROLE | ASSISTENTE A")
-addToggle(pMain,"Assistente IA — controle central, coleta e assistência de movimento","AssistantIA",function(v)
+addToggle(pMain,"Assistente IA â€” controle central, coleta e assistÃªncia de movimento","AssistantIA",function(v)
     setAssistant(v)
 end,states,true)
 local assistantInfo=Instance.new("TextLabel")
@@ -2841,7 +2947,7 @@ assistantInfo.TextWrapped=true
 assistantInfo.TextYAlignment=Enum.TextYAlignment.Top
 assistantInfo.Font=Enum.Font.Gotham
 assistantInfo.TextSize=12
-assistantInfo.Text="Quando ativada, coordena a coleta seletiva e liga automaticamente o pulo assistido: detecta obstáculos à frente em várias alturas, calcula o impulso vertical pela altura do objeto e preserva o avanço horizontal. Também investiga stamina, movimento, visibilidade e estados replicados de monstros. A ocultação deste painel é apenas visual/local; invisibilidade real contra a IA exige integração no script de servidor dos monstros."
+assistantInfo.Text="Quando ativada, coordena a coleta seletiva e liga automaticamente o pulo assistido: detecta obstÃ¡culos Ã  frente em vÃ¡rias alturas, calcula o impulso vertical pela altura do objeto e preserva o avanÃ§o horizontal. TambÃ©m investiga stamina, movimento, visibilidade e estados replicados de monstros. A ocultaÃ§Ã£o deste painel Ã© apenas visual/local; invisibilidade real contra a IA exige integraÃ§Ã£o no script de servidor dos monstros."
 assistantInfo.Parent=pMain
 
 -- ESP
@@ -2864,26 +2970,26 @@ addSection(pEnv,"MAPA E VISIBILIDADE")
 addToggle(pEnv,"Remover Portas e Tampas de Dutos","RemoveDoors",setDoors)
 addToggle(pEnv,"Brilho","Brightness",setBrightness)
 addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
-addToggle(pEnv,"Pulo automático","AutoJump",setAutoJump)
-addToggle(pEnv,"Ficar invisível","PlayerInvisible",setPlayerInvisible)
+addToggle(pEnv,"Pulo automÃ¡tico","AutoJump",setAutoJump)
+addToggle(pEnv,"Ficar invisÃ­vel","PlayerInvisible",setPlayerInvisible)
 
 -- COLETA
 addSection(pCollect,"COLETA")
-addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
+addToggle(pCollect,"Coleta InstantÃ¢nea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
 addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
-addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V37: impulso vertical adaptativo, obstáculos, visibilidade e monstros",function()
-    statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
+addSection(pData,"COLETOR AUTOMÃTICO DA PARTIDA")
+addButton(pData,"V38: filtro de dutos/paredes, pulo estÃ¡vel e ocultaÃ§Ã£o visual local",function()
+    statusLabel.Text = "Cliente: coleta somente dados replicados/visÃ­veis; valores do servidor nÃ£o sÃ£o acessÃ­veis."
 end)
 
-addToggle(pData,"Coletor automático durante a partida","DataCollector",function(enabled)
+addToggle(pData,"Coletor automÃ¡tico durante a partida","DataCollector",function(enabled)
     if states.AssistantIA and not enabled then
         states.DataCollector=true
         if toggleDrawers.DataCollector then toggleDrawers.DataCollector(true) end
-        statusLabel.Text="A coleta prioritária é coordenada pela Assistente IA e permanece ativa enquanto ela estiver ligada."
+        statusLabel.Text="A coleta prioritÃ¡ria Ã© coordenada pela Assistente IA e permanece ativa enquanto ela estiver ligada."
         return
     end
     if enabled then
@@ -2904,7 +3010,7 @@ addToggle(pData,"Coletor automático durante a partida","DataCollector",function
             .." | Pendentes: "..#sendQueue
         flushReports()
     else
-        statusLabel.Text = "Coleta automática pausada"
+        statusLabel.Text = "Coleta automÃ¡tica pausada"
     end
 end)
 
@@ -2955,7 +3061,7 @@ reportBox = Instance.new("TextBox")
 reportBox.Size = UDim2.new(1,-6,0,210)
 reportBox.BackgroundColor3 = Color3.fromRGB(10,10,13)
 reportBox.TextColor3 = Color3.new(1,1,1)
-reportBox.PlaceholderText = "O relatório completo aparecerá aqui..."
+reportBox.PlaceholderText = "O relatÃ³rio completo aparecerÃ¡ aqui..."
 reportBox.Text = ""
 reportBox.TextSize = 10
 reportBox.TextWrapped = false
@@ -2967,7 +3073,7 @@ reportBox.TextEditable = true
 reportBox.Parent = pData
 Instance.new("UICorner",reportBox).CornerRadius = UDim.new(0,6)
 
-addButton(pData,"GERAR E COPIAR RELATÓRIO INTEIRO",copyFullReport)
+addButton(pData,"GERAR E COPIAR RELATÃ“RIO INTEIRO",copyFullReport)
 
 addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     statusLabel.Text = "Atualizando dados..."
@@ -2975,12 +3081,12 @@ addButton(pData,"ATUALIZAR E ENVIAR AGORA",function()
     flushReports()
 
     statusLabel.Text =
-        "Varredura concluída | Novos: "..a
+        "Varredura concluÃ­da | Novos: "..a
         .." | Registros: "..#records
         .." | Pendentes: "..#sendQueue
 end)
 
-addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
+addButton(pData,"LIMPAR RELATÃ“RIO LOCAL",function()
     table.clear(records)
     table.clear(recordIndex)
     table.clear(sentKeys)
@@ -2993,21 +3099,21 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
     lastDataScan = 0
 
     reportBox.Text = ""
-    statusLabel.Text = "Relatório local limpo"
+    statusLabel.Text = "RelatÃ³rio local limpo"
 end)
 
--- CONFIGURAÇÕES
-addSection(pConfig,"DIAGNÓSTICO E CONFIGURAÇÕES")
+-- CONFIGURAÃ‡Ã•ES
+addSection(pConfig,"DIAGNÃ“STICO E CONFIGURAÃ‡Ã•ES")
 
 addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V31",
+        "DIAGNÃ“STICO DE STAMINA V31",
         "HUD observado: PlayerGui.StaminaHUD (amostragem dos elementos internos)",
-        "Resistência e Stamina são tratadas separadamente; a barra visual não prova o valor real.",
-        "A coleta agora registra até 24 elementos da HUD para distinguir as duas barras.",
-        "Valores controlados pelo servidor não podem ser garantidos por alteração local.",
+        "ResistÃªncia e Stamina sÃ£o tratadas separadamente; a barra visual nÃ£o prova o valor real.",
+        "A coleta agora registra atÃ© 24 elementos da HUD para distinguir as duas barras.",
+        "Valores controlados pelo servidor nÃ£o podem ser garantidos por alteraÃ§Ã£o local.",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -3033,7 +3139,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
         end
     end
 
-    -- Mostra também valores numéricos locais que podem ter nomes não óbvios,
+    -- Mostra tambÃ©m valores numÃ©ricos locais que podem ter nomes nÃ£o Ã³bvios,
     -- sem alterar nenhum deles. Isso ajuda a descobrir qual acompanha a HUD.
     local roots={player,player.Character,player:FindFirstChild("PlayerScripts"),player:FindFirstChild("Backpack"),PlayerGui}
     local listed={}
@@ -3045,7 +3151,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
                         listed[obj]=true
                         local line=obj:GetFullName().." = "..tostring(obj.Value)
                         if isStaminaName(obj.Name) then
-                            table.insert(lines,"CANDIDATO NUMÉRICO: "..line)
+                            table.insert(lines,"CANDIDATO NUMÃ‰RICO: "..line)
                         end
                     end
                 end
@@ -3053,15 +3159,15 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
         end
     end
     table.insert(lines,"")
-    table.insert(lines,"HoldEndStamina é observado, mas não é alterado: ainda não foi confirmado como estamina atual.")
-    table.insert(lines,"A barra HUD é somente visual; o botão só altera valores locais com nomes reconhecidos.")
+    table.insert(lines,"HoldEndStamina Ã© observado, mas nÃ£o Ã© alterado: ainda nÃ£o foi confirmado como estamina atual.")
+    table.insert(lines,"A barra HUD Ã© somente visual; o botÃ£o sÃ³ altera valores locais com nomes reconhecidos.")
 
     if #found==0 then
         table.insert(lines,"Nenhum objeto localizado.")
     end
 
     reportBox.Text = table.concat(lines,"\n")
-    statusLabel.Text = "Diagnóstico de stamina concluído"
+    statusLabel.Text = "DiagnÃ³stico de stamina concluÃ­do"
     showPage("Dados")
 end)
 
@@ -3077,8 +3183,8 @@ addButton(pConfig,"FECHAR PAINEL",function()
     gui:Destroy()
 end,true)
 
--- Padronização tipográfica: evita mistura de fontes, RichText inesperado e cortes
--- inconsistentes nos rótulos/controles, inclusive no botão de minimizar.
+-- PadronizaÃ§Ã£o tipogrÃ¡fica: evita mistura de fontes, RichText inesperado e cortes
+-- inconsistentes nos rÃ³tulos/controles, inclusive no botÃ£o de minimizar.
 for _,uiObject in ipairs(gui:GetDescendants()) do
     if uiObject:IsA("TextLabel") or uiObject:IsA("TextButton") or uiObject:IsA("TextBox") then
         pcall(function()
@@ -3161,7 +3267,7 @@ restore.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- ATUALIZAÇÃO OTIMIZADA
+-- ATUALIZAÃ‡ÃƒO OTIMIZADA
 --==============================================================
 
 task.spawn(function()
@@ -3172,8 +3278,8 @@ task.spawn(function()
     while gui and gui.Parent do
         local now = os.clock()
 
-        -- ESP é atualizado por ativação, troca de personagem e novos objetos.
-        -- Não existe mais varredura periódica do mapa inteiro.
+        -- ESP Ã© atualizado por ativaÃ§Ã£o, troca de personagem e novos objetos.
+        -- NÃ£o existe mais varredura periÃ³dica do mapa inteiro.
 
         if states.RemoveDoors and now-lastDoor>=1.0 then
             refreshDoorCollision()
@@ -3189,7 +3295,7 @@ task.spawn(function()
             lastMovement = now
         end
 
-        -- Anti-Flash é orientado a eventos: evita varrer toda a interface a cada 0,5s.
+        -- Anti-Flash Ã© orientado a eventos: evita varrer toda a interface a cada 0,5s.
 
         if states.DataCollector and now-lastDataScan>=30 then
             local a = scanGame()
