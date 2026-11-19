@@ -1,7 +1,7 @@
 --==============================================================
--- ROUBE OU MORRA V34 | Feito por Tales
+-- ROUBE OU MORRA V35 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash preservado | V34: salto dinâmico e diagnóstico ampliado
+-- Anti-Flash preservado | V35: salto frontal calibrado e ocultação visual completa local
 -- Resistência (barra fina) registrada apenas como referência visual separada
 -- Limites defensivos para desempenho mobile e tipografia padronizada
 --==============================================================
@@ -17,7 +17,7 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV32","RoubeOuMorraV33"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV32","RoubeOuMorraV33","RoubeOuMorraV34"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -2114,12 +2114,14 @@ local function setInfiniteStamina(enabled)
 end
 
 --==============================================================
--- V34 | PULO DINÂMICO E OCULTAÇÃO VISUAL
+-- V35 | PULO FRONTAL CALIBRADO E OCULTAÇÃO VISUAL COMPLETA LOCAL
 --==============================================================
 local autoJumpGeneration=0
 local lastAutoJumpAt=0
 local lastMovementReportAt=0
 local savedLocalTransparency=setmetatable({}, {__mode="k"})
+local savedVisualEnabled=setmetatable({}, {__mode="k"})
+local invisibleDescendantConnection=nil
 
 movementAndVisibilitySnapshot = function(reason)
     if not states.DataCollector then return end
@@ -2151,7 +2153,6 @@ movementAndVisibilitySnapshot = function(reason)
     end end) end
     queueReport(visibility,"VisibilityStateSample|"..tostring(math.floor(os.clock()/5)))
 
-    -- Observa jogadores/entidades classificados como monstros e seus atributos replicados.
     for _,plr in ipairs(Players:GetPlayers()) do
         if plr~=player and plr.Character and isMonster(plr.Character) then
             local model=plr.Character
@@ -2167,32 +2168,87 @@ movementAndVisibilitySnapshot = function(reason)
     end
 end
 
+local function applyLocalInvisibleToObject(obj,enabled)
+    if not obj then return end
+    if obj:IsA("BasePart") then
+        if enabled then
+            if savedLocalTransparency[obj]==nil then savedLocalTransparency[obj]=obj.LocalTransparencyModifier end
+            pcall(function() obj.LocalTransparencyModifier=1 end)
+        else
+            local old=savedLocalTransparency[obj]
+            if old~=nil then pcall(function() obj.LocalTransparencyModifier=old end) end
+            savedLocalTransparency[obj]=nil
+        end
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        if enabled then
+            if savedLocalTransparency[obj]==nil then savedLocalTransparency[obj]=obj.Transparency end
+            pcall(function() obj.Transparency=1 end)
+        else
+            local old=savedLocalTransparency[obj]
+            if old~=nil then pcall(function() obj.Transparency=old end) end
+            savedLocalTransparency[obj]=nil
+        end
+    elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
+        if enabled then
+            if savedVisualEnabled[obj]==nil then savedVisualEnabled[obj]=obj.Enabled end
+            pcall(function() obj.Enabled=false end)
+        else
+            local old=savedVisualEnabled[obj]
+            if old~=nil then pcall(function() obj.Enabled=old end) end
+            savedVisualEnabled[obj]=nil
+        end
+    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+        if enabled then
+            if savedVisualEnabled[obj]==nil then savedVisualEnabled[obj]=obj.Enabled end
+            pcall(function() obj.Enabled=false end)
+        else
+            local old=savedVisualEnabled[obj]
+            if old~=nil then pcall(function() obj.Enabled=old end) end
+            savedVisualEnabled[obj]=nil
+        end
+    end
+end
+
 local function setPlayerInvisible(enabled)
     states.PlayerInvisible=enabled==true
     local char=player.Character
-    if not char then return end
-    for _,obj in ipairs(char:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            if enabled then
-                if savedLocalTransparency[obj]==nil then savedLocalTransparency[obj]=obj.LocalTransparencyModifier end
-                pcall(function() obj.LocalTransparencyModifier=1 end)
-            else
-                local old=savedLocalTransparency[obj]
-                if old~=nil then pcall(function() obj.LocalTransparencyModifier=old end) end
-                savedLocalTransparency[obj]=nil
-            end
-        elseif obj:IsA("Decal") or obj:IsA("Texture") then
-            if enabled then
-                if savedLocalTransparency[obj]==nil then savedLocalTransparency[obj]=obj.Transparency end
-                pcall(function() obj.Transparency=1 end)
-            else
-                local old=savedLocalTransparency[obj]
-                if old~=nil then pcall(function() obj.Transparency=old end) end
-                savedLocalTransparency[obj]=nil
-            end
-        end
+    if invisibleDescendantConnection then
+        invisibleDescendantConnection:Disconnect()
+        invisibleDescendantConnection=nil
     end
-    if states.DataCollector then movementAndVisibilitySnapshot(enabled and "LocalVisualConcealmentEnabled" or "LocalVisualConcealmentDisabled") end
+    if not char then return end
+
+    for _,obj in ipairs(char:GetDescendants()) do
+        applyLocalInvisibleToObject(obj,states.PlayerInvisible)
+    end
+    if states.PlayerInvisible then
+        invisibleDescendantConnection=char.DescendantAdded:Connect(function(obj)
+            if states.PlayerInvisible then applyLocalInvisibleToObject(obj,true) end
+        end)
+    end
+    if states.DataCollector then
+        movementAndVisibilitySnapshot(states.PlayerInvisible and "LocalFullAvatarConcealmentEnabled" or "LocalFullAvatarConcealmentDisabled")
+    end
+end
+
+local function getWorldVerticalHalfExtent(part)
+    local cf=part.CFrame
+    local size=part.Size
+    return math.abs(cf.RightVector.Y)*size.X*0.5
+        +math.abs(cf.UpVector.Y)*size.Y*0.5
+        +math.abs(cf.LookVector.Y)*size.Z*0.5
+end
+
+local function getWorldHorizontalExtents(part)
+    local cf=part.CFrame
+    local size=part.Size
+    local x=math.abs(cf.RightVector.X)*size.X*0.5
+        +math.abs(cf.UpVector.X)*size.Y*0.5
+        +math.abs(cf.LookVector.X)*size.Z*0.5
+    local z=math.abs(cf.RightVector.Z)*size.X*0.5
+        +math.abs(cf.UpVector.Z)*size.Y*0.5
+        +math.abs(cf.LookVector.Z)*size.Z*0.5
+    return x*2,z*2
 end
 
 local function setAutoJump(enabled)
@@ -2212,69 +2268,82 @@ local function setAutoJump(enabled)
             if char and hum and root and hum.Health>0 and not hum.Sit and not hum.PlatformStand then
                 rayParams.FilterDescendantsInstances={char,espFolder}
                 local move=hum.MoveDirection
-                local horizontal=Vector3.new(move.X,0,move.Z)
                 local velocity=root.AssemblyLinearVelocity
-                local speed=Vector3.new(velocity.X,0,velocity.Z).Magnitude
+                local horizontalVelocity=Vector3.new(velocity.X,0,velocity.Z)
+                local horizontal=Vector3.new(move.X,0,move.Z)
+                if horizontal.Magnitude<0.15 and horizontalVelocity.Magnitude>1.5 then
+                    horizontal=horizontalVelocity.Unit
+                end
+                local speed=horizontalVelocity.Magnitude
 
-                if horizontal.Magnitude>0.15 and speed>0.55 and hum.FloorMaterial~=Enum.Material.Air then
+                if horizontal.Magnitude>0.15 and speed>0.5
+                    and hum.FloorMaterial~=Enum.Material.Air
+                    and velocity.Y<5 then
                     local direction=horizontal.Unit
                     local footY=root.Position.Y-(hum.HipHeight+root.Size.Y*0.5)
-                    local lowOrigin=Vector3.new(root.Position.X,footY+0.65,root.Position.Z)
-                    local low=Workspace:Raycast(lowOrigin,direction*5.5,rayParams)
-                    local obstacle=low and low.Instance
+                    local rayOrigins={
+                        root.Position+Vector3.new(0,-2.15,0),
+                        root.Position+Vector3.new(0,-1.05,0),
+                        root.Position+Vector3.new(0,0.15,0)
+                    }
+                    local bestHit=nil
+                    for _,origin in ipairs(rayOrigins) do
+                        local hit=Workspace:Raycast(origin,direction*8,rayParams)
+                        if hit and hit.Instance and hit.Instance:IsA("BasePart")
+                            and hit.Instance.CanCollide and not hit.Instance:IsDescendantOf(char) then
+                            if not bestHit or hit.Distance<bestHit.Distance then bestHit=hit end
+                        end
+                    end
 
-                    if obstacle and obstacle:IsA("BasePart") and obstacle.CanCollide
-                        and not obstacle:IsDescendantOf(char) then
-                        -- Procura o topo real do mesmo objeto. A antiga V33 limitava
-                        -- a estimativa a 7,5 studs e descartava quase todos os obstáculos altos.
-                        local probeDistance=math.max(1.0,math.min(4.0,low.Distance+0.8))
-                        local topOrigin=lowOrigin+direction*probeDistance+Vector3.new(0,300,0)
-                        local topHit=Workspace:Raycast(topOrigin,Vector3.new(0,-320,0),rayParams)
-                        local topY=nil
-                        if topHit and topHit.Instance==obstacle then topY=topHit.Position.Y end
+                    if bestHit then
+                        local obstacle=bestHit.Instance
+                        local halfY=getWorldVerticalHalfExtent(obstacle)
+                        local topY=obstacle.Position.Y+halfY
+                        local obstacleHeight=topY-footY
+                        local worldX,worldZ=getWorldHorizontalExtents(obstacle)
+                        local projectedWidth=math.abs(direction.X)*worldX+math.abs(direction.Z)*worldZ
+                        local triggerDistance=math.clamp(2.8+speed*0.22+math.min(projectedWidth,5)*0.12,3.2,7.0)
+                        local obstacleKey=safePath(obstacle)
+                        local heightValid=obstacleHeight>=0.65 and obstacleHeight<=18
+                        local closeEnough=bestHit.Distance<=triggerDistance
+                        local jumpVelocity=0
+                        if heightValid then
+                            local gravity=math.max(Workspace.Gravity,1)
+                            jumpVelocity=math.clamp(math.sqrt(2*gravity*(obstacleHeight+1.8)),42,190)
+                        end
 
-                        local obstacleHeight=topY and math.max(0,topY-footY) or nil
-                        local obstacleSize=obstacle.Size
-                        local projectedWidth=math.abs(direction.X)*obstacleSize.X
-                            +math.abs(direction.Z)*obstacleSize.Z
-                        local clearanceOrigin=root.Position+Vector3.new(0,hum.HipHeight+1.5,0)
-                        local headHit=Workspace:Raycast(clearanceOrigin,direction*math.max(2.5,math.min(projectedWidth+2,12)),rayParams)
+                        -- Raycast horizontal acima do topo: só pula se houver espaço para subir.
+                        local clearanceOrigin=Vector3.new(root.Position.X,topY+1.0,root.Position.Z)
+                        local clearanceHit=Workspace:Raycast(clearanceOrigin,direction*math.max(2.5,math.min(projectedWidth*0.5+1.5,7)),rayParams)
+                        local clearanceOK=clearanceHit==nil or clearanceHit.Instance==obstacle
+                        local grounded=hum.FloorMaterial~=Enum.Material.Air and math.abs(velocity.Y)<7
+                        local canJump=heightValid and closeEnough and clearanceOK and grounded
+                            and os.clock()-lastAutoJumpAt>=0.85
 
-                        -- Impulso dinâmico: calcula a velocidade necessária para subir
-                        -- acima do topo medido. O teto é alto para evitar o antigo limite
-                        -- baixo, mas a física/servidor ainda pode rejeitar o impulso.
-                        local requiredHeight=obstacleHeight and (obstacleHeight+3.5) or 14
-                        local jumpVelocity=math.sqrt(2*Workspace.Gravity*requiredHeight)
-                        jumpVelocity=math.max(jumpVelocity,Workspace.Gravity*0.9)
-                        jumpVelocity=math.min(jumpVelocity,300)
-                        local topKnown=obstacleHeight~=nil and obstacleHeight>0.25
-                        local plausibleObstacle=(topKnown and obstacleHeight<=250)
-                            or (not topKnown and low.Distance<=2.4 and headHit~=nil)
-                        local headClear=(headHit==nil) or (headHit.Instance==obstacle)
-                        local key=safePath(obstacle)
-
-                        if plausibleObstacle and headClear and os.clock()-lastAutoJumpAt>=1.15 then
+                        if canJump then
                             lastAutoJumpAt=os.clock()
                             pcall(function()
+                                -- Mantém X/Z do personagem. Só aplica componente vertical;
+                                -- evita o impulso lateral que fazia o avatar ser lançado para trás.
                                 hum.Jump=true
                                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
                                 local current=root.AssemblyLinearVelocity
-                                if current.Y<jumpVelocity then
-                                    root.AssemblyLinearVelocity=Vector3.new(current.X,jumpVelocity,current.Z)
-                                end
+                                root.AssemblyLinearVelocity=Vector3.new(current.X,math.max(current.Y,jumpVelocity),current.Z)
                             end)
+                        end
 
-                            if states.DataCollector then
-                                queueReport({Event="MovementObstacleSnapshot",ObstacleName=obstacle.Name,
-                                    ObstacleClass=obstacle.ClassName,ObstaclePath=safePath(obstacle),
-                                    ObstaclePosition=tostring(low.Position),ObstacleDistance=low.Distance,
-                                    ObstacleHeight=obstacleHeight,ObstacleProjectedWidth=projectedWidth,
-                                    EstimatedJumpVelocity=jumpVelocity,EstimatedTopReachable=topKnown,
-                                    HeadClearance=headClear,HumanoidState=tostring(hum:GetState()),
-                                    MoveDirection=tostring(move),HorizontalSpeed=speed,
-                                    CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
-                                    "MovementObstacleSnapshot|"..key.."|"..tostring(math.floor(os.clock()*2)))
-                            end
+                        if states.DataCollector and (canJump or os.clock()-lastMovementReportAt>=1.5) then
+                            queueReport({Event="MovementObstacleSnapshot",ObstacleName=obstacle.Name,
+                                ObstacleClass=obstacle.ClassName,ObstaclePath=obstacleKey,
+                                ObstaclePosition=tostring(bestHit.Position),ObstacleDistance=bestHit.Distance,
+                                ObstacleHeight=obstacleHeight,ObstacleProjectedWidth=projectedWidth,
+                                TriggerDistance=triggerDistance,EstimatedJumpVelocity=jumpVelocity,
+                                EstimatedTopReachable=heightValid,HeadClearance=clearanceOK,
+                                JumpTriggered=canJump,HumanoidState=tostring(hum:GetState()),
+                                MoveDirection=tostring(move),HorizontalSpeed=speed,
+                                CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
+                                "MovementObstacleSnapshot|"..obstacleKey.."|"..tostring(math.floor(os.clock()*2)))
+                            lastMovementReportAt=os.clock()
                         end
                     end
                 end
@@ -2284,12 +2353,16 @@ local function setAutoJump(enabled)
                 lastMovementReportAt=os.clock()
                 movementAndVisibilitySnapshot("MovementPeriodic")
             end
-            task.wait(0.10)
+            task.wait(0.05)
         end
     end)
 end
 
 player.CharacterAdded:Connect(function(char)
+    if invisibleDescendantConnection then
+        invisibleDescendantConnection:Disconnect()
+        invisibleDescendantConnection=nil
+    end
     task.wait(0.5)
     if states.PlayerInvisible then setPlayerInvisible(true) end
     if states.DataCollector then movementAndVisibilitySnapshot("CharacterRespawned") end
