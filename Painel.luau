@@ -1,9 +1,9 @@
 --==============================================================
--- ROUBE OU MORRA V40 | Feito por Tales
+-- ROUBE OU MORRA V40 | Base V39 preservada | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash V39 preservado | V40: filtro de dutos no piso, raridades ampliadas e diagnósticos transparentes
+-- Anti-Flash V39 preservado | V40: filtro de dutos no chão e textos revisados
 -- Resistência (barra fina) registrada apenas como referência visual separada
--- Limites defensivos para desempenho mobile | V40: alterações incrementais sobre a inicialização V39
+-- Limites defensivos para desempenho mobile | V40: alterações pontuais sobre a base V39
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -17,7 +17,7 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV33","RoubeOuMorraV34","RoubeOuMorraV35","RoubeOuMorraV36","RoubeOuMorraV37","RoubeOuMorraV38","RoubeOuMorraV39","RoubeOuMorraV40"}) do
+for _,name in ipairs({"RoubeOuMorraV19","RoubeOuMorraV20","RoubeOuMorraV21","RoubeOuMorraV22","RoubeOuMorraV24","RoubeOuMorraV25","RoubeOuMorraV26","RoubeOuMorraV27","RoubeOuMorraV28","RoubeOuMorraV29","RoubeOuMorraV30","RoubeOuMorraV31","RoubeOuMorraV33","RoubeOuMorraV34","RoubeOuMorraV35","RoubeOuMorraV36","RoubeOuMorraV37","RoubeOuMorraV38","RoubeOuMorraV39"}) do
     local old = PlayerGui:FindFirstChild(name)
     if old then old:Destroy() end
 end
@@ -72,12 +72,10 @@ local previousV37ESPFolder = Workspace:FindFirstChild("TalesESP_V37_Folder")
 if previousV37ESPFolder then previousV37ESPFolder:Destroy() end
 local previousV38ESPFolder = Workspace:FindFirstChild("TalesESP_V38_Folder")
 if previousV38ESPFolder then previousV38ESPFolder:Destroy() end
-local previousV39ESPFolder = Workspace:FindFirstChild("TalesESP_V39_Folder")
-if previousV39ESPFolder then previousV39ESPFolder:Destroy() end
-local espFolder = Workspace:FindFirstChild("TalesESP_V40_Folder")
+local espFolder = Workspace:FindFirstChild("TalesESP_V39_Folder")
 if not espFolder then
     espFolder = Instance.new("Folder")
-    espFolder.Name = "TalesESP_V40_Folder"
+    espFolder.Name = "TalesESP_V39_Folder"
     espFolder.Parent = Workspace
 end
 local hiddenParts,savedPrompts = {},{}
@@ -275,44 +273,15 @@ local function getEntityActivitySuffix(model)
     return ""
 end
 
-local function normalizeRarityText(value)
-    return string.lower(tostring(value or "")):gsub("[%s_%-]","")
-end
-
-local function matchRarityValue(value)
-    if type(value)~="string" then return nil end
-    local normalized=normalizeRarityText(value)
-    -- Primeiro compara igualdade para não confundir "Uncommon" com "Common".
-    for rarity in pairs(rarityEnabled) do
-        if normalized==normalizeRarityText(rarity) then return rarity end
-    end
-    -- Alguns jogos acrescentam texto ao valor (ex.: "Rarity: Mythic").
-    for rarity in pairs(rarityEnabled) do
-        if normalized:find(normalizeRarityText(rarity),1,true) then return rarity end
-    end
-    return nil
-end
-
 local function getRarity(obj)
-    if not obj then return nil end
-    -- A raridade pode estar no item, no Model pai ou em um StringValue interno.
-    -- Limite de ancestrais para evitar varreduras caras durante o registro incremental.
-    local current=obj
-    for _=1,5 do
-        if not current then break end
-        for _,key in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
-            local rarity=matchRarityValue(current:GetAttribute(key))
-            if rarity then return rarity end
-        end
-        for _,child in ipairs(current:GetChildren()) do
-            if child:IsA("StringValue") and contains(child.Name,{"rarity","raridade","tier"}) then
-                local rarity=matchRarityValue(child.Value)
-                if rarity then return rarity end
+    for _,key in ipairs({"Rarity","Raridade"}) do
+        local value = obj:GetAttribute(key)
+        if type(value)=="string" then
+            for rarity in pairs(rarityEnabled) do
+                if value:lower()==rarity:lower() then return rarity end
             end
         end
-        current=current.Parent
     end
-    return nil
 end
 
 --==============================================================
@@ -443,15 +412,7 @@ local function registerESPCandidate(obj)
         local isPlayerModel=getPlayerFromModel(obj)~=nil
         local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
         -- Dutos-modelo entram no cache sem alterar a classificação de jogadores/monstros.
-        eligible=isPlayerModel or hasHumanoid or isMonster(obj) or isDuctRoot(obj) or getRarity(obj)~=nil
-        if not eligible then
-            for _,child in ipairs(obj:GetChildren()) do
-                if child:IsA("ValueBase") and contains(child.Name,{"rarity","raridade","tier"}) then
-                    eligible=true
-                    break
-                end
-            end
-        end
+        eligible=isPlayerModel or hasHumanoid or isMonster(obj) or isDuctRoot(obj)
     elseif obj:IsA("BasePart") then
         -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
         eligible=isDuctRoot(obj) or getRarity(obj)~=nil
@@ -486,37 +447,25 @@ local function getESPWorldPosition(obj)
     return nil
 end
 
-local ductGroundCache=setmetatable({}, {__mode="k"})
-local function isGroundAccessibleDuct(obj)
-    if not obj or not obj.Parent then return false end
-    local cached=ductGroundCache[obj]
-    if cached and os.clock()-cached.time<1.5 then return cached.ok end
-
-    local center,size,cf
-    if obj:IsA("BasePart") then
-        center,size,cf=obj.Position,obj.Size,obj.CFrame
-    elseif obj:IsA("Model") then
-        local ok,bbox,bounds=pcall(function() return obj:GetBoundingBox() end)
-        if not ok then return false end
-        center,size,cf=bbox.Position,bounds,bbox
-    else
-        return false
+-- Duto ESP: aceita apenas dutos próximos de uma superfície de chão.
+-- O filtro é aplicado só ao ESP de dutos; não altera ESP de jogadores/monstros.
+local function isFloorAccessibleDuct(obj, worldPosition)
+    if not obj or not worldPosition then return false end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local excluded = {obj, player.Character, espFolder}
+    if obj:IsA("BasePart") and obj.Parent and obj.Parent:IsA("Model") then
+        table.insert(excluded, obj.Parent)
     end
+    params.FilterDescendantsInstances = excluded
+    params.IgnoreWater = true
 
-    local halfHeight=math.abs(cf.RightVector.Y)*size.X*0.5
-        +math.abs(cf.UpVector.Y)*size.Y*0.5
-        +math.abs(cf.LookVector.Y)*size.Z*0.5
-    local origin=Vector3.new(center.X,center.Y-halfHeight+0.35,center.Z)
-    local params=RaycastParams.new()
-    params.FilterType=Enum.RaycastFilterType.Exclude
-    local excluded={obj,espFolder}
-    if player.Character then table.insert(excluded,player.Character) end
-    params.FilterDescendantsInstances=excluded
-    params.IgnoreWater=true
-    local hit=Workspace:Raycast(origin,Vector3.new(0,-2.4,0),params)
-    local accessible=hit~=nil and hit.Distance<=1.8
-    ductGroundCache[obj]={ok=accessible,time=os.clock()}
-    return accessible
+    local origin = worldPosition + Vector3.new(0, 1.25, 0)
+    local result = Workspace:Raycast(origin, Vector3.new(0, -7, 0), params)
+    if not result then return false end
+
+    local distanceFromObject = (origin - result.Position).Magnitude
+    return result.Normal.Y >= 0.68 and distanceFromObject <= 4.75
 end
 
 local function refreshESP()
@@ -586,10 +535,7 @@ local function refreshESP()
             -- Dutos possuem limite separado para não competir com ESP de players/monstros.
             if withinDistance and ductRenderedCount<MAX_ESP_OBJECTS
                 and states.ESPDucts and isDuctRoot(obj)
-                and (function()
-                    local ok,result=pcall(isGroundAccessibleDuct,obj)
-                    return ok and result==true
-                end)() then
+                and isFloorAccessibleDuct(obj,worldPosition) then
                 createESP(obj,Color3.fromRGB(255,170,40),nil,true)
                 keep[obj] = true
                 ductRenderedCount += 1
@@ -660,14 +606,6 @@ end
 local espRefreshScheduled=false
 Workspace.DescendantAdded:Connect(function(obj)
     registerESPCandidate(obj)
-    local ancestor=obj.Parent
-    for _=1,5 do
-        if not ancestor or ancestor==Workspace then break end
-        if ancestor:IsA("Model") or ancestor:IsA("BasePart") then
-            registerESPCandidate(ancestor)
-        end
-        ancestor=ancestor.Parent
-    end
     if (states.ESPPlayers or states.ESPMonsters or states.ESPDucts)
         and (obj:IsA("Model") or obj:IsA("BasePart"))
         and not espRefreshScheduled then
@@ -1761,7 +1699,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V40 - RELATORIO",
+        "ROUBE OU MORRA V38 - RELATORIO",
         "Investigação focada de estamina e candidatos numéricos locais",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -2277,11 +2215,20 @@ local function findStaminaObjects()
     return found
 end
 
+local staminaEnforcementGeneration = 0
 local function setInfiniteStamina(enabled)
-    states.InfiniteStamina = enabled
+    states.InfiniteStamina = enabled == true
+    staminaEnforcementGeneration += 1
+    local generation = staminaEnforcementGeneration
 
-    if enabled then
+    if states.InfiniteStamina then
         findStaminaObjects()
+        task.spawn(function()
+            while states.InfiniteStamina and generation == staminaEnforcementGeneration do
+                findStaminaObjects()
+                task.wait(0.75)
+            end
+        end)
     else
         for obj,value in pairs(staminaOriginals) do
             if obj and obj.Parent then
@@ -2548,7 +2495,7 @@ local function setAutoJump(enabled)
 
                 -- Quando o jogador fica travado encostado no móvel, MoveDirection
                 -- pode cair para zero. Nesse caso usa a velocidade e, por último,
-                -- a direção frontal do personagem para continuar a assistência.
+                -- a direção frontal do personagem para continuar a assist\u00eancia.
                 -- Não usa a direção do olhar quando o jogador está parado:
                 -- isso causava pulos ao apenas encostar/raspar em paredes.
                 if directionVector.Magnitude<0.12 and horizontalVelocity.Magnitude>1.35 then
@@ -2851,7 +2798,7 @@ end
 --==============================================================
 
 gui = Instance.new("ScreenGui")
-gui.Name = "RoubeOuMorraV40"
+gui.Name = "RoubeOuMorraV38"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
@@ -2880,7 +2827,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V40  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V38  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -3146,27 +3093,17 @@ addToggle(pEnv,"Remover Portas e Tampas de Dutos","RemoveDoors",setDoors)
 addToggle(pEnv,"Brilho","Brightness",setBrightness)
 addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 addToggle(pEnv,"Pulo automático","AutoJump",setAutoJump)
-addToggle(pEnv,"Ocultar personagem (visual local)","PlayerInvisible",setPlayerInvisible)
-local invisibleInfo=Instance.new("TextLabel")
-invisibleInfo.Size=UDim2.new(1,-8,0,44)
-invisibleInfo.BackgroundTransparency=1
-invisibleInfo.TextColor3=Color3.fromRGB(220,190,150)
-invisibleInfo.TextWrapped=true
-invisibleInfo.TextYAlignment=Enum.TextYAlignment.Top
-invisibleInfo.Font=Enum.Font.Gotham
-invisibleInfo.TextSize=11
-invisibleInfo.Text="Oculta o avatar somente na sua tela. Não altera a detecção dos monstros no servidor; isso exige suporte do código do jogo."
-invisibleInfo.Parent=pEnv
+addToggle(pEnv,"Invisibilidade visual (somente local)","PlayerInvisible",setPlayerInvisible)
 
 -- COLETA
 addSection(pCollect,"COLETA")
 addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Estamina infinita (valores locais)","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V40: ESP de dutos e brilho persistente contra efeitos visuais",function()
+addButton(pData,"V40: filtro de dutos no chão, reforço local de stamina e textos corrigidos",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
@@ -3288,31 +3225,17 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
 end)
 
 -- CONFIGURAÇÕES
-addSection(pConfig,"MODO STREAMER | LIMITAÇÃO")
-local streamerInfo=Instance.new("TextLabel")
-streamerInfo.Size=UDim2.new(1,-8,0,82)
-streamerInfo.BackgroundTransparency=1
-streamerInfo.TextColor3=Color3.fromRGB(220,190,150)
-streamerInfo.TextWrapped=true
-streamerInfo.TextYAlignment=Enum.TextYAlignment.Top
-streamerInfo.Font=Enum.Font.Gotham
-streamerInfo.TextSize=11
-streamerInfo.Text="Um script cliente não consegue garantir que painel e ESP fiquem invisíveis na gravação enquanto continuam visíveis para você. Ocultar localmente também esconderia os elementos da sua própria tela."
-streamerInfo.Parent=pConfig
-
 addSection(pConfig,"DIAGNÓSTICO E CONFIGURAÇÕES")
 
 addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     local found = findStaminaObjects()
 
     local lines = {
-        "DIAGNÓSTICO DE STAMINA V40",
+        "DIAGNÓSTICO DE STAMINA V31",
         "HUD observado: PlayerGui.StaminaHUD (amostragem dos elementos internos)",
         "Resistência e Stamina são tratadas separadamente; a barra visual não prova o valor real.",
         "A coleta agora registra até 24 elementos da HUD para distinguir as duas barras.",
         "Valores controlados pelo servidor não podem ser garantidos por alteração local.",
-        "Teste automático de jogo: NÃO EXECUTADO (o script precisa ser testado dentro da partida).",
-        "Stamina infinita real: NÃO CONFIRMADA; valores locais não garantem alteração do estado no servidor.",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
