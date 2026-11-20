@@ -276,36 +276,36 @@ local function getEntityActivitySuffix(model)
 end
 
 local function normalizeRarityText(value)
-    local textValue=string.lower(tostring(value or ""))
-    textValue=textValue:gsub("[%s_%-]","")
-    return textValue
+    return string.lower(tostring(value or "")):gsub("[%s_%-]","")
 end
 
 local function getRarity(obj)
-    -- A raridade pode estar no Model, na peça principal ou em um ValueBase
-    -- próximo. Procura somente alguns ancestrais para evitar varreduras caras.
+    -- Procura metadados no próprio item e em poucos ancestrais, sem varrer o mapa.
     local current=obj
     for _=1,6 do
         if not current then break end
         for _,key in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
-            local value=current:GetAttribute(key)
-            if type(value)=="string" then
+            local ok,value=pcall(function() return current:GetAttribute(key) end)
+            if ok and type(value)=="string" then
                 local normalized=normalizeRarityText(value)
                 for rarity in pairs(rarityEnabled) do
-                    if normalized==normalizeRarityText(rarity)
-                        or normalized:find(normalizeRarityText(rarity),1,true) then
+                    local target=normalizeRarityText(rarity)
+                    if normalized==target or normalized:find(target,1,true) then
                         return rarity
                     end
                 end
             end
         end
-        for _,child in ipairs(current:GetChildren()) do
-            if child:IsA("StringValue") and contains(child.Name,{"rarity","raridade","tier"}) then
-                local normalized=normalizeRarityText(child.Value)
-                for rarity in pairs(rarityEnabled) do
-                    if normalized==normalizeRarityText(rarity)
-                        or normalized:find(normalizeRarityText(rarity),1,true) then
-                        return rarity
+        local ok,children=pcall(function() return current:GetChildren() end)
+        if ok then
+            for _,child in ipairs(children) do
+                if child:IsA("StringValue") and contains(child.Name,{"rarity","raridade","tier"}) then
+                    local normalized=normalizeRarityText(child.Value)
+                    for rarity in pairs(rarityEnabled) do
+                        local target=normalizeRarityText(rarity)
+                        if normalized==target or normalized:find(target,1,true) then
+                            return rarity
+                        end
                     end
                 end
             end
@@ -436,51 +436,61 @@ end
 
 local espPending = false
 local refreshESP
-
+local registerESPCandidate
 local rarityWatchSet=setmetatable({}, {__mode="k"})
-local function registerESPCandidate(obj)
-    if not obj then return end
 
-    -- Observa metadados também em objetos ainda sem raridade. Alguns itens recebem
-    -- o atributo depois de serem parentados no Workspace.
-    if (obj:IsA("Model") or obj:IsA("BasePart")) and not rarityWatchSet[obj] then
-        rarityWatchSet[obj]=true
-        for _,attributeName in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
-            obj:GetAttributeChangedSignal(attributeName):Connect(function()
-                if getRarity(obj) then
-                    registerESPCandidate(obj)
-                end
-                if gui and gui.Parent and refreshESP then task.defer(refreshESP) end
-            end)
-        end
+local function watchRarityMetadata(obj)
+    if not obj or rarityWatchSet[obj] then return end
+    rarityWatchSet[obj]=true
+    for _,attributeName in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
+        obj:GetAttributeChangedSignal(attributeName):Connect(function()
+            if getRarity(obj) then
+                registerESPCandidate(obj)
+            end
+            if gui and gui.Parent and refreshESP then
+                task.defer(refreshESP)
+            end
+        end)
     end
+end
 
+registerESPCandidate = function(obj)
+    if not obj then return end
     if espCandidateSet[obj] then return end
+
+    -- Models são observados mesmo antes de receber metadados; isso permite
+    -- detectar raridade atribuída depois do spawn sem conectar cada peça do mapa.
+    if obj:IsA("Model") then watchRarityMetadata(obj) end
+
     local eligible=false
     if obj:IsA("Model") then
         local isPlayerModel=getPlayerFromModel(obj)~=nil
         local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
-        -- Dutos-modelo entram no cache próprio sem alterar a classificação
-        -- de jogadores ou monstros.
-        eligible=isPlayerModel or hasHumanoid or isMonster(obj) or isDuctRoot(obj) or getRarity(obj)~=nil
+        eligible=isPlayerModel or hasHumanoid or isMonster(obj)
+            or isDuctRoot(obj) or getRarity(obj)~=nil
         if not eligible then
-            for _,desc in ipairs(obj:GetChildren()) do
-                if desc:IsA("ValueBase") and contains(desc.Name,{"rarity","raridade","tier"}) then
+            for _,child in ipairs(obj:GetChildren()) do
+                if child:IsA("ValueBase") and contains(child.Name,{"rarity","raridade","tier"}) then
                     eligible=true
                     break
                 end
             end
         end
     elseif obj:IsA("BasePart") then
-        -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
-        eligible=isDuctRoot(obj) or getRarity(obj)~=nil
+        local ownOrInheritedRarity=getRarity(obj)
+        local parentHasRarity=obj.Parent and obj.Parent:IsA("Model")
+            and getRarity(obj.Parent)~=nil
+        eligible=isDuctRoot(obj) or (ownOrInheritedRarity~=nil and not parentHasRarity)
     end
+
     if eligible then
         espCandidateSet[obj]=true
         table.insert(espCandidateList,obj)
+        -- Só conecta sinais a candidatos plausíveis, evitando milhares de conexões
+        -- em cada peça do cenário durante a varredura inicial.
+        watchRarityMetadata(obj)
     end
 end
-
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
@@ -505,36 +515,25 @@ local function getESPWorldPosition(obj)
     return nil
 end
 
--- V40: validação geométrica do duto. O contorno só é desenhado quando
--- a parte inferior do objeto está próxima de um piso alcançável; dutos no teto
--- e peças suspensas são descartados. O resultado fica em cache por pouco tempo.
+-- Só considera duto acessível quando há piso logo abaixo da sua face inferior.
+-- O resultado é cacheado brevemente para reduzir Raycasts em celulares.
 local ductGroundCache=setmetatable({}, {__mode="k"})
 local function isGroundAccessibleDuct(obj)
     if not obj or not obj.Parent then return false end
     local cached=ductGroundCache[obj]
     if cached and os.clock()-cached.time<1.5 then return cached.ok end
 
-    local center,size
+    local center,size,cf
     if obj:IsA("BasePart") then
-        center=obj.Position
-        size=obj.Size
+        center,size,cf=obj.Position,obj.Size,obj.CFrame
     elseif obj:IsA("Model") then
-        local ok,cf,bounds=pcall(function() return obj:GetBoundingBox() end)
+        local ok,bboxCF,bounds=pcall(function() return obj:GetBoundingBox() end)
         if not ok then return false end
-        center=cf.Position
-        size=bounds
+        center,size,cf=bboxCF.Position,bounds,bboxCF
     else
         return false
     end
 
-    local cf
-    if obj:IsA("BasePart") then
-        cf=obj.CFrame
-    else
-        local ok,bboxCF=pcall(function() return obj:GetBoundingBox() end)
-        if not ok then return false end
-        cf=bboxCF
-    end
     local verticalHalf=math.abs(cf.RightVector.Y)*size.X*0.5
         +math.abs(cf.UpVector.Y)*size.Y*0.5
         +math.abs(cf.LookVector.Y)*size.Z*0.5
@@ -542,6 +541,7 @@ local function isGroundAccessibleDuct(obj)
     local origin=Vector3.new(center.X,bottomY+0.45,center.Z)
     local params=RaycastParams.new()
     params.FilterType=Enum.RaycastFilterType.Exclude
+
     local ductContainer=obj
     local ancestor=obj.Parent
     for _=1,6 do
@@ -557,10 +557,12 @@ local function isGroundAccessibleDuct(obj)
     params.FilterDescendantsInstances=exclusions
     params.IgnoreWater=true
 
-    local hit=Workspace:Raycast(origin,Vector3.new(0,-3.25,0),params)
-    local ok=hit~=nil and hit.Distance<=2.35
-    ductGroundCache[obj]={ok=ok,time=os.clock()}
-    return ok
+    local ok,hit=pcall(function()
+        return Workspace:Raycast(origin,Vector3.new(0,-3.25,0),params)
+    end)
+    local grounded=ok and hit~=nil and hit.Distance<=2.35
+    ductGroundCache[obj]={ok=grounded,time=os.clock()}
+    return grounded
 end
 
 refreshESP = function()
@@ -702,14 +704,6 @@ end
 local espRefreshScheduled=false
 Workspace.DescendantAdded:Connect(function(obj)
     registerESPCandidate(obj)
-    local ancestor=obj.Parent
-    for _=1,5 do
-        if not ancestor or ancestor==Workspace then break end
-        if ancestor:IsA("Model") or ancestor:IsA("BasePart") then
-            registerESPCandidate(ancestor)
-        end
-        ancestor=ancestor.Parent
-    end
     if (states.ESPPlayers or states.ESPMonsters or states.ESPDucts)
         and (obj:IsA("Model") or obj:IsA("BasePart"))
         and not espRefreshScheduled then
@@ -2342,7 +2336,7 @@ local function setInfiniteStamina(enabled)
     if enabled then
         local found=findStaminaObjects()
         if statusLabel then
-            statusLabel.Text="Estamina experimental: "..tostring(#found).." objetos candidatos observados. O efeito real ainda depende do valor controlado pelo servidor."
+            statusLabel.Text="Estamina experimental: "..tostring(#found).." candidatos locais observados. O efeito real depende do servidor."
         end
     else
         for obj,value in pairs(staminaOriginals) do
@@ -2355,7 +2349,7 @@ local function setInfiniteStamina(enabled)
 end
 
 --==============================================================
--- V39 | ASSISTENTE IA: FILTROS, PULO ADAPTATIVO E VISIBILIDADE LOCAL
+-- V40 | ASSISTENTE IA: FILTROS, PULO ADAPTATIVO E VISIBILIDADE LOCAL
 --==============================================================
 local autoJumpGeneration=0
 local lastAutoJumpAt=0
@@ -2741,7 +2735,7 @@ local function setAutoJump(enabled)
                         end
 
                         if states.DataCollector and (shouldJump or os.clock()-lastMovementReportAt>=0.9) then
-                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V39",
+                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V40",
                                 ObstacleName=obstacle.Name,ObstacleClass=obstacle.ClassName,
                                 ObstaclePath=safePath(obstacle),ObstaclePosition=tostring(bestHit.Position),
                                 ObstacleDistance=bestHit.Distance,ObstacleHeight=obstacleHeight,
@@ -2755,7 +2749,7 @@ local function setAutoJump(enabled)
                                 RetryCount=sameObstacleAttempts,
                                 MaxAssistObstacleHeight=MAX_ASSIST_OBSTACLE_HEIGHT,
                                 CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
-                                "MovementObstacleSnapshotV39|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
+                                "MovementObstacleSnapshotV40|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
                             lastMovementReportAt=os.clock()
                         end
                         end -- bestHit válido após filtros de duto
@@ -2768,7 +2762,7 @@ local function setAutoJump(enabled)
 
             if states.DataCollector and os.clock()-lastMovementReportAt>=5 then
                 lastMovementReportAt=os.clock()
-                movementAndVisibilitySnapshot("MovementPeriodicV39")
+                movementAndVisibilitySnapshot("MovementPeriodicV40")
             end
             task.wait(0.055)
         end
@@ -3228,7 +3222,7 @@ addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V40: filtro de dutos no piso, raridades ampliadas e diagnóstico honesto",function()
+addButton(pData,"V40: filtro de dutos no piso, raridades ampliadas e diagnóstico",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
@@ -3350,7 +3344,7 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
 end)
 
 -- CONFIGURAÇÕES
-addSection(pConfig,"CONFIGURAÇÕES EXTRAS | MODO STREAMER")
+addSection(pConfig,"MODO STREAMER | LIMITAÇÃO TÉCNICA")
 local streamerInfo=Instance.new("TextLabel")
 streamerInfo.Size=UDim2.new(1,-8,0,82)
 streamerInfo.BackgroundTransparency=1
@@ -3359,10 +3353,10 @@ streamerInfo.TextWrapped=true
 streamerInfo.TextYAlignment=Enum.TextYAlignment.Top
 streamerInfo.Font=Enum.Font.Gotham
 streamerInfo.TextSize=11
-streamerInfo.Text="O Roblox não oferece a este script um controle confiável para excluir seletivamente painel e ESP da gravação/espelhamento enquanto você continua vendo tudo. Ocultar localmente também esconderia de você. Por isso, esta versão não simula uma proteção que não consegue garantir."
+streamerInfo.Text="Um script cliente Roblox não consegue garantir que painel e ESP fiquem invisíveis somente na gravação/espelhamento enquanto continuam visíveis para você. Ocultar localmente também os esconderia da sua tela."
 streamerInfo.Parent=pConfig
 addButton(pConfig,"VER LIMITAÇÃO DO MODO STREAMER",function()
-    statusLabel.Text="Modo Streamer: ocultação seletiva na captura não é suportada de forma confiável por um script cliente."
+    statusLabel.Text="Modo Streamer: ocultação seletiva na captura não é suportada de forma confiável por script cliente."
     showPage("Configurações")
 end)
 
@@ -3424,8 +3418,8 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     table.insert(lines,"")
     table.insert(lines,"HoldEndStamina é observado, mas não é alterado: ainda não foi confirmado como estamina atual.")
     table.insert(lines,"A barra HUD é somente visual; não prova o valor de stamina usado pelo servidor.")
-    table.insert(lines,"Teste automático de jogo: NÃO EXECUTADO (o script precisa ser testado dentro da partida).")
-    table.insert(lines,"Stamina infinita real: NÃO CONFIRMADA; valores locais não garantem alteração do estado no servidor.")
+    table.insert(lines,"Teste automático dentro da partida: NÃO EXECUTADO.")
+    table.insert(lines,"Stamina infinita real: NÃO CONFIRMADA; valores locais não garantem alteração no servidor.")
 
     if #found==0 then
         table.insert(lines,"Nenhum objeto localizado.")
