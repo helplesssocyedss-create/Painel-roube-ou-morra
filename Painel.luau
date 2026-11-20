@@ -1,9 +1,9 @@
 --==============================================================
--- ROUBE OU MORRA V40 | Base V39 preservada | Feito por Tales
+-- ROUBE OU MORRA V39 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash V39 preservado | V40: filtro de dutos no chão e textos revisados
+-- Anti-Flash V38 preservado | V39: ESP de dutos e brilho persistente contra efeitos visuais
 -- Resistência (barra fina) registrada apenas como referência visual separada
--- Limites defensivos para desempenho mobile | V40: alterações pontuais sobre a base V39
+-- Limites defensivos para desempenho mobile e tipografia padronizada | V39: ajustes restritos a dutos e brilho
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -371,48 +371,75 @@ local function createESP(obj,color,textValue,small)
     bill.TextLabel.TextColor3 = color
 end
 
--- Identifica somente o próprio objeto duto, não qualquer peça
--- que esteja próxima ou seja descendente dele.
-local function isDuctRoot(obj)
-    if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then
-        return false
-    end
-
-    if contains(obj.Name,{"duct","duto","vent","airvent"}) then
-        return true
-    end
+-- Reconhece o duto pelo próprio objeto ou por um Model ancestral.
+-- Isso inclui tampas/portas que ficam dentro do Model do duto no chão.
+local function hasDuctMarker(obj)
+    if not obj then return false end
+    if contains(obj.Name,{"duct","duto","vent","airvent"}) then return true end
 
     for _,key in ipairs({"Type","ObjectType","Category","Kind"}) do
-        local value = obj:GetAttribute(key)
-        if type(value)=="string"
-            and contains(value,{"duct","duto","vent"}) then
+        local value=obj:GetAttribute(key)
+        if type(value)=="string" and contains(value,{"duct","duto","vent"}) then
             return true
         end
     end
 
-    local ok,tags = pcall(function()
-        return CollectionService:GetTags(obj)
-    end)
-
+    local ok,tags=pcall(function() return CollectionService:GetTags(obj) end)
     if ok then
         for _,tag in ipairs(tags) do
             if contains(tag,{"duct","duto","vent"}) then return true end
         end
     end
-
     return false
 end
 
+local function getDuctRoot(obj)
+    if not obj then return nil end
+    local current=obj
+    for _=1,10 do
+        if not current then break end
+        if (current:IsA("Model") or current:IsA("BasePart")) and hasDuctMarker(current) then
+            return current
+        end
+        current=current.Parent
+    end
+    return nil
+end
+
+local function isDuctRoot(obj)
+    return getDuctRoot(obj)~=nil
+end
+
+-- O ESP de dutos considera apenas tampas próximas ao piso, não dutos no teto.
+local function isFloorAccessibleDuct(obj,worldPosition)
+    if not obj or not worldPosition then return false end
+    local params=RaycastParams.new()
+    params.FilterType=Enum.RaycastFilterType.Exclude
+    local excluded={obj,espFolder}
+    if player.Character then table.insert(excluded,player.Character) end
+    params.FilterDescendantsInstances=excluded
+    params.IgnoreWater=true
+    local origin=worldPosition+Vector3.new(0,1.25,0)
+    local result=Workspace:Raycast(origin,Vector3.new(0,-8,0),params)
+    if not result or result.Normal.Y<0.65 then return false end
+    return (origin-result.Position).Magnitude<=6.5
+end
+
 local espPending = false
+local refreshESP
 
 local function registerESPCandidate(obj)
-    if not obj or espCandidateSet[obj] then return end
+    if not obj then return end
+    local ductRoot=getDuctRoot(obj)
+    if ductRoot then obj=ductRoot end
+    if espCandidateSet[obj] then return end
     local eligible=false
     if obj:IsA("Model") then
         local isPlayerModel=getPlayerFromModel(obj)~=nil
         local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
         -- Dutos-modelo entram no cache sem alterar a classificação de jogadores/monstros.
-        eligible=isPlayerModel or hasHumanoid or isMonster(obj) or isDuctRoot(obj)
+        eligible=isPlayerModel or hasHumanoid or isMonster(obj)
+            or isDuctRoot(obj) or getRarity(obj)~=nil
     elseif obj:IsA("BasePart") then
         -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
         eligible=isDuctRoot(obj) or getRarity(obj)~=nil
@@ -423,11 +450,29 @@ local function registerESPCandidate(obj)
     end
 end
 
+local espAttributeWatch=setmetatable({}, {__mode="k"})
+local function watchESPCandidateAttributes(obj)
+    if not obj or espAttributeWatch[obj] then return end
+    espAttributeWatch[obj]=true
+    obj.AttributeChanged:Connect(function()
+        registerESPCandidate(obj)
+        local anyRarity=false
+        for _,enabled in pairs(rarityEnabled) do
+            if enabled then anyRarity=true break end
+        end
+        if gui and gui.Parent and (states.ESPPlayers or states.ESPMonsters
+            or states.ESPDucts or anyRarity) then
+            task.defer(refreshESP)
+        end
+    end)
+end
+
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
     -- Uma varredura inicial única; atualizações seguintes são incrementais.
     for index,obj in ipairs(Workspace:GetDescendants()) do
+        watchESPCandidateAttributes(obj)
         registerESPCandidate(obj)
         if index%350==0 then task.wait() end
     end
@@ -447,28 +492,7 @@ local function getESPWorldPosition(obj)
     return nil
 end
 
--- Duto ESP: aceita apenas dutos próximos de uma superfície de chão.
--- O filtro é aplicado só ao ESP de dutos; não altera ESP de jogadores/monstros.
-local function isFloorAccessibleDuct(obj, worldPosition)
-    if not obj or not worldPosition then return false end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local excluded = {obj, player.Character, espFolder}
-    if obj:IsA("BasePart") and obj.Parent and obj.Parent:IsA("Model") then
-        table.insert(excluded, obj.Parent)
-    end
-    params.FilterDescendantsInstances = excluded
-    params.IgnoreWater = true
-
-    local origin = worldPosition + Vector3.new(0, 1.25, 0)
-    local result = Workspace:Raycast(origin, Vector3.new(0, -7, 0), params)
-    if not result then return false end
-
-    local distanceFromObject = (origin - result.Position).Magnitude
-    return result.Normal.Y >= 0.68 and distanceFromObject <= 4.75
-end
-
-local function refreshESP()
+refreshESP = function()
     if espBusy then
         espPending = true
         return
@@ -535,14 +559,14 @@ local function refreshESP()
             -- Dutos possuem limite separado para não competir com ESP de players/monstros.
             if withinDistance and ductRenderedCount<MAX_ESP_OBJECTS
                 and states.ESPDucts and isDuctRoot(obj)
+                and not isMonster(obj) and not getPlayerFromModel(obj)
                 and isFloorAccessibleDuct(obj,worldPosition) then
                 createESP(obj,Color3.fromRGB(255,170,40),nil,true)
                 keep[obj] = true
                 ductRenderedCount += 1
             end
 
-            if canRender and renderedCount < MAX_ESP_OBJECTS
-                and (obj:IsA("Model") or obj:IsA("BasePart")) then
+            if withinDistance and (obj:IsA("Model") or obj:IsA("BasePart")) then
                 local rarity = getRarity(obj)
                 local parentMonster = obj.Parent
                     and obj.Parent:IsA("Model")
@@ -564,7 +588,6 @@ local function refreshESP()
                         true
                     )
                     keep[obj] = true
-                    renderedCount += 1
                 end
             end
 
@@ -605,6 +628,7 @@ end
 
 local espRefreshScheduled=false
 Workspace.DescendantAdded:Connect(function(obj)
+    watchESPCandidateAttributes(obj)
     registerESPCandidate(obj)
     if (states.ESPPlayers or states.ESPMonsters or states.ESPDucts)
         and (obj:IsA("Model") or obj:IsA("BasePart"))
@@ -1699,7 +1723,7 @@ end)
 local function exportData()
     local out = {
         "========================================",
-        "ROUBE OU MORRA V38 - RELATORIO",
+        "ROUBE OU MORRA V39 - RELATÓRIO",
         "Investigação focada de estamina e candidatos numéricos locais",
         "Feito por Tales",
         "Data: "..os.date("%d/%m/%Y %H:%M:%S"),
@@ -2215,20 +2239,11 @@ local function findStaminaObjects()
     return found
 end
 
-local staminaEnforcementGeneration = 0
 local function setInfiniteStamina(enabled)
-    states.InfiniteStamina = enabled == true
-    staminaEnforcementGeneration += 1
-    local generation = staminaEnforcementGeneration
+    states.InfiniteStamina = enabled
 
-    if states.InfiniteStamina then
+    if enabled then
         findStaminaObjects()
-        task.spawn(function()
-            while states.InfiniteStamina and generation == staminaEnforcementGeneration do
-                findStaminaObjects()
-                task.wait(0.75)
-            end
-        end)
     else
         for obj,value in pairs(staminaOriginals) do
             if obj and obj.Parent then
@@ -2574,7 +2589,7 @@ local function setAutoJump(enabled)
                         local triggerDistance=math.clamp(3.0+horizontalSpeed*0.12,3.2,5.2)
                         local closeEnough=bestHit.Distance<=triggerDistance
 
-                        -- Exige espaço acima e à frente do topo. Em dutos/locais baixos,
+                        -- Exige espaço acima e Ã  frente do topo. Em dutos/locais baixos,
                         -- a verificação impede a IA de tentar um salto sem altura livre.
                         local clearanceOrigin=Vector3.new(bestHit.Position.X,topY+0.35,bestHit.Position.Z)
                         local forwardClearance=Workspace:Raycast(clearanceOrigin,direction*2.0,rayParams)
@@ -2827,7 +2842,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,-95,1,0)
 title.Position = UDim2.fromOffset(16,0)
 title.BackgroundTransparency = 1
-title.Text = "ROUBE OU MORRA V38  |  Feito por Tales"
+title.Text = "ROUBE OU MORRA V39  |  Feito por Tales"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 16
@@ -3093,17 +3108,17 @@ addToggle(pEnv,"Remover Portas e Tampas de Dutos","RemoveDoors",setDoors)
 addToggle(pEnv,"Brilho","Brightness",setBrightness)
 addToggle(pEnv,"Anti-Flash","AntiFlash",setAntiFlash)
 addToggle(pEnv,"Pulo automático","AutoJump",setAutoJump)
-addToggle(pEnv,"Invisibilidade visual (somente local)","PlayerInvisible",setPlayerInvisible)
+addToggle(pEnv,"Ficar invisível","PlayerInvisible",setPlayerInvisible)
 
 -- COLETA
 addSection(pCollect,"COLETA")
 addToggle(pCollect,"Coleta Instantânea","InstantCollection",setInstant)
 addToggle(pCollect,"Auto Farm (prompts no alcance)","AutoFarm",setAutoFarm)
-addToggle(pCollect,"Estamina infinita (valores locais)","InfiniteStamina",setInfiniteStamina)
+addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
-addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V40: filtro de dutos no chão, reforço local de stamina e textos corrigidos",function()
+addSection(pData,"COLETOR AUTOMÃTICO DA PARTIDA")
+addButton(pData,"V39: ESP de dutos e brilho persistente contra efeitos visuais",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
