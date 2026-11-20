@@ -1,9 +1,9 @@
 --==============================================================
 -- ROUBE OU MORRA V40 | Feito por Tales
 -- ESP incremental com limite de renderização | Classificação rigorosa de entidades
--- Anti-Flash preservado | V40: filtro de dutos no piso, raridades ampliadas e diagnósticos transparentes
+-- Anti-Flash V39 preservado | V40: filtro de dutos no piso, raridades ampliadas e diagnósticos transparentes
 -- Resistência (barra fina) registrada apenas como referência visual separada
--- Limites defensivos para desempenho mobile e tipografia padronizada | V40: filtro geométrico de dutos e raridades ampliadas
+-- Limites defensivos para desempenho mobile | V40: alterações incrementais sobre a inicialização V39
 --==============================================================
 
 local Players = game:GetService("Players")
@@ -279,35 +279,35 @@ local function normalizeRarityText(value)
     return string.lower(tostring(value or "")):gsub("[%s_%-]","")
 end
 
+local function matchRarityValue(value)
+    if type(value)~="string" then return nil end
+    local normalized=normalizeRarityText(value)
+    -- Primeiro compara igualdade para não confundir "Uncommon" com "Common".
+    for rarity in pairs(rarityEnabled) do
+        if normalized==normalizeRarityText(rarity) then return rarity end
+    end
+    -- Alguns jogos acrescentam texto ao valor (ex.: "Rarity: Mythic").
+    for rarity in pairs(rarityEnabled) do
+        if normalized:find(normalizeRarityText(rarity),1,true) then return rarity end
+    end
+    return nil
+end
+
 local function getRarity(obj)
-    -- Procura metadados no próprio item e em poucos ancestrais, sem varrer o mapa.
+    if not obj then return nil end
+    -- A raridade pode estar no item, no Model pai ou em um StringValue interno.
+    -- Limite de ancestrais para evitar varreduras caras durante o registro incremental.
     local current=obj
-    for _=1,6 do
+    for _=1,5 do
         if not current then break end
         for _,key in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
-            local ok,value=pcall(function() return current:GetAttribute(key) end)
-            if ok and type(value)=="string" then
-                local normalized=normalizeRarityText(value)
-                for rarity in pairs(rarityEnabled) do
-                    local target=normalizeRarityText(rarity)
-                    if normalized==target or normalized:find(target,1,true) then
-                        return rarity
-                    end
-                end
-            end
+            local rarity=matchRarityValue(current:GetAttribute(key))
+            if rarity then return rarity end
         end
-        local ok,children=pcall(function() return current:GetChildren() end)
-        if ok then
-            for _,child in ipairs(children) do
-                if child:IsA("StringValue") and contains(child.Name,{"rarity","raridade","tier"}) then
-                    local normalized=normalizeRarityText(child.Value)
-                    for rarity in pairs(rarityEnabled) do
-                        local target=normalizeRarityText(rarity)
-                        if normalized==target or normalized:find(target,1,true) then
-                            return rarity
-                        end
-                    end
-                end
+        for _,child in ipairs(current:GetChildren()) do
+            if child:IsA("StringValue") and contains(child.Name,{"rarity","raridade","tier"}) then
+                local rarity=matchRarityValue(child.Value)
+                if rarity then return rarity end
             end
         end
         current=current.Parent
@@ -435,39 +435,15 @@ local function isDuctRoot(obj)
 end
 
 local espPending = false
-local refreshESP
-local registerESPCandidate
-local rarityWatchSet=setmetatable({}, {__mode="k"})
 
-local function watchRarityMetadata(obj)
-    if not obj or rarityWatchSet[obj] then return end
-    rarityWatchSet[obj]=true
-    for _,attributeName in ipairs({"Rarity","Raridade","ItemRarity","RarityName","Tier"}) do
-        obj:GetAttributeChangedSignal(attributeName):Connect(function()
-            if getRarity(obj) then
-                registerESPCandidate(obj)
-            end
-            if gui and gui.Parent and refreshESP then
-                task.defer(refreshESP)
-            end
-        end)
-    end
-end
-
-registerESPCandidate = function(obj)
-    if not obj then return end
-    if espCandidateSet[obj] then return end
-
-    -- Models são observados mesmo antes de receber metadados; isso permite
-    -- detectar raridade atribuída depois do spawn sem conectar cada peça do mapa.
-    if obj:IsA("Model") then watchRarityMetadata(obj) end
-
+local function registerESPCandidate(obj)
+    if not obj or espCandidateSet[obj] then return end
     local eligible=false
     if obj:IsA("Model") then
         local isPlayerModel=getPlayerFromModel(obj)~=nil
         local hasHumanoid=obj:FindFirstChildOfClass("Humanoid")~=nil
-        eligible=isPlayerModel or hasHumanoid or isMonster(obj)
-            or isDuctRoot(obj) or getRarity(obj)~=nil
+        -- Dutos-modelo entram no cache sem alterar a classificação de jogadores/monstros.
+        eligible=isPlayerModel or hasHumanoid or isMonster(obj) or isDuctRoot(obj) or getRarity(obj)~=nil
         if not eligible then
             for _,child in ipairs(obj:GetChildren()) do
                 if child:IsA("ValueBase") and contains(child.Name,{"rarity","raridade","tier"}) then
@@ -477,20 +453,15 @@ registerESPCandidate = function(obj)
             end
         end
     elseif obj:IsA("BasePart") then
-        local ownOrInheritedRarity=getRarity(obj)
-        local parentHasRarity=obj.Parent and obj.Parent:IsA("Model")
-            and getRarity(obj.Parent)~=nil
-        eligible=isDuctRoot(obj) or (ownOrInheritedRarity~=nil and not parentHasRarity)
+        -- Não guardar cada peça do mapa: somente dutos e itens com raridade explícita.
+        eligible=isDuctRoot(obj) or getRarity(obj)~=nil
     end
-
     if eligible then
-        espCandidateSet[obj]=true
+        espCandidateSet[obj] = true
         table.insert(espCandidateList,obj)
-        -- Só conecta sinais a candidatos plausíveis, evitando milhares de conexões
-        -- em cada peça do cenário durante a varredura inicial.
-        watchRarityMetadata(obj)
     end
 end
+
 local function buildESPCacheOnce()
     if espCacheBuilt then return end
     espCacheBuilt = true
@@ -515,8 +486,6 @@ local function getESPWorldPosition(obj)
     return nil
 end
 
--- Só considera duto acessível quando há piso logo abaixo da sua face inferior.
--- O resultado é cacheado brevemente para reduzir Raycasts em celulares.
 local ductGroundCache=setmetatable({}, {__mode="k"})
 local function isGroundAccessibleDuct(obj)
     if not obj or not obj.Parent then return false end
@@ -527,45 +496,30 @@ local function isGroundAccessibleDuct(obj)
     if obj:IsA("BasePart") then
         center,size,cf=obj.Position,obj.Size,obj.CFrame
     elseif obj:IsA("Model") then
-        local ok,bboxCF,bounds=pcall(function() return obj:GetBoundingBox() end)
+        local ok,bbox,bounds=pcall(function() return obj:GetBoundingBox() end)
         if not ok then return false end
-        center,size,cf=bboxCF.Position,bounds,bboxCF
+        center,size,cf=bbox.Position,bounds,bbox
     else
         return false
     end
 
-    local verticalHalf=math.abs(cf.RightVector.Y)*size.X*0.5
+    local halfHeight=math.abs(cf.RightVector.Y)*size.X*0.5
         +math.abs(cf.UpVector.Y)*size.Y*0.5
         +math.abs(cf.LookVector.Y)*size.Z*0.5
-    local bottomY=center.Y-verticalHalf
-    local origin=Vector3.new(center.X,bottomY+0.45,center.Z)
+    local origin=Vector3.new(center.X,center.Y-halfHeight+0.35,center.Z)
     local params=RaycastParams.new()
     params.FilterType=Enum.RaycastFilterType.Exclude
-
-    local ductContainer=obj
-    local ancestor=obj.Parent
-    for _=1,6 do
-        if not ancestor or ancestor==Workspace then break end
-        if ancestor:IsA("Model") and isDuctRoot(ancestor) then
-            ductContainer=ancestor
-            break
-        end
-        ancestor=ancestor.Parent
-    end
-    local exclusions={ductContainer,espFolder}
-    if player.Character then table.insert(exclusions,player.Character) end
-    params.FilterDescendantsInstances=exclusions
+    local excluded={obj,espFolder}
+    if player.Character then table.insert(excluded,player.Character) end
+    params.FilterDescendantsInstances=excluded
     params.IgnoreWater=true
-
-    local ok,hit=pcall(function()
-        return Workspace:Raycast(origin,Vector3.new(0,-3.25,0),params)
-    end)
-    local grounded=ok and hit~=nil and hit.Distance<=2.35
-    ductGroundCache[obj]={ok=grounded,time=os.clock()}
-    return grounded
+    local hit=Workspace:Raycast(origin,Vector3.new(0,-2.4,0),params)
+    local accessible=hit~=nil and hit.Distance<=1.8
+    ductGroundCache[obj]={ok=accessible,time=os.clock()}
+    return accessible
 end
 
-refreshESP = function()
+local function refreshESP()
     if espBusy then
         espPending = true
         return
@@ -629,11 +583,13 @@ refreshESP = function()
                 end
             end
 
-            -- O ESP de dutos usa orçamento separado: excesso de jogadores/monstros
-            -- não impede que os dutos próximos sejam destacados.
+            -- Dutos possuem limite separado para não competir com ESP de players/monstros.
             if withinDistance and ductRenderedCount<MAX_ESP_OBJECTS
                 and states.ESPDucts and isDuctRoot(obj)
-                and isGroundAccessibleDuct(obj) then
+                and (function()
+                    local ok,result=pcall(isGroundAccessibleDuct,obj)
+                    return ok and result==true
+                end)() then
                 createESP(obj,Color3.fromRGB(255,170,40),nil,true)
                 keep[obj] = true
                 ductRenderedCount += 1
@@ -704,6 +660,14 @@ end
 local espRefreshScheduled=false
 Workspace.DescendantAdded:Connect(function(obj)
     registerESPCandidate(obj)
+    local ancestor=obj.Parent
+    for _=1,5 do
+        if not ancestor or ancestor==Workspace then break end
+        if ancestor:IsA("Model") or ancestor:IsA("BasePart") then
+            registerESPCandidate(ancestor)
+        end
+        ancestor=ancestor.Parent
+    end
     if (states.ESPPlayers or states.ESPMonsters or states.ESPDucts)
         and (obj:IsA("Model") or obj:IsA("BasePart"))
         and not espRefreshScheduled then
@@ -1895,7 +1859,7 @@ local function copyFullReport()
 end
 
 --==============================================================
--- BRILHO
+-- BRILHO | PROTEÇÃO LOCAL CONTRA EFEITOS VISUAIS DE ENTIDADES
 --==============================================================
 local savedBrightnessEffects = setmetatable({}, {__mode="k"})
 local watchedBrightnessRoots = setmetatable({}, {__mode="k"})
@@ -1915,8 +1879,7 @@ end
 local function suppressBrightnessEffect(obj)
     if not states.Brightness or not isBrightnessEffect(obj) or not obj.Parent then return end
     if savedBrightnessEffects[obj]==nil then
-        local antiFlashOriginal=savedEffects[obj]
-        savedBrightnessEffects[obj]=antiFlashOriginal~=nil and antiFlashOriginal or obj.Enabled
+        savedBrightnessEffects[obj]=obj.Enabled
     end
     pcall(function() obj.Enabled=false end)
     if not watchedBrightnessEffects[obj] then
@@ -2021,9 +1984,7 @@ local function effectLooksLikeFlash(obj)
     return contains(name,{
         "flash","blind","flashbang","clarão",
         "stunflash","whiteout","flash_effect","blindness",
-        "flashblur","flashburn","blackout","black_out","apagao","apagão",
-        "darkness","disorient","desorient","disintegr","desintegr",
-        "desync","desincron","dizzy","confusion","distortion"
+        "flashblur","flashburn"
     })
 end
 
@@ -2063,11 +2024,7 @@ local function isFlashGuiOverlay(obj)
     local inKnownFlashGui=false
     for _=1,12 do
         if not current then break end
-        if current:IsA("ScreenGui") and contains(current.Name,{
-            "flashbang","nullflash","blackout","black_out","apagao","apagão",
-            "darkness","blind","disorient","desorient","disintegr","desintegr",
-            "desync","desincron","dizzy","confusion","distortion"
-        }) then
+        if current:IsA("ScreenGui") and (current.Name=="Flashbang" or current.Name=="NullFlash") then
             inKnownFlashGui=true
             break
         end
@@ -2080,23 +2037,19 @@ local function isFlashGuiOverlay(obj)
     if screen.X<=0 or screen.Y<=0 or size.X<screen.X*0.80 or size.Y<screen.Y*0.80 then
         return false
     end
-    -- A habilidade pode aplicar uma tela branca ou escura; a identificação
-    -- confiável aqui é o ScreenGui conhecido + cobertura quase total da tela.
     if obj:IsA("Frame") then
-        return obj.BackgroundTransparency<0.98
+        local c=obj.BackgroundColor3
+        return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.BackgroundTransparency<0.90
     end
-    return obj.ImageTransparency<0.98
+    local c=obj.ImageColor3
+    return c.R>0.88 and c.G>0.88 and c.B>0.88 and obj.ImageTransparency<0.90
 end
 
 local function isInsideFlashGui(obj)
     local current=obj
     for _=1,12 do
         if not current then break end
-        if current:IsA("ScreenGui") and contains(current.Name,{
-            "flashbang","nullflash","blackout","black_out","apagao","apagão",
-            "darkness","blind","disorient","desorient","disintegr","desintegr",
-            "desync","desincron","dizzy","confusion","distortion"
-        }) then
+        if current:IsA("ScreenGui") and (current.Name=="Flashbang" or current.Name=="NullFlash") then
             return true
         end
         current=current.Parent
@@ -2108,10 +2061,7 @@ local function suppressFlashObject(obj)
     if not obj or not obj.Parent then return end
     if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") then
         if effectLooksLikeFlash(obj) then
-            if savedEffects[obj]==nil then
-                local brightnessOriginal=savedBrightnessEffects[obj]
-                savedEffects[obj]=brightnessOriginal~=nil and brightnessOriginal or obj.Enabled
-            end
+            if savedEffects[obj]==nil then savedEffects[obj]=obj.Enabled end
             pcall(function() obj.Enabled=false end)
         end
     elseif obj:IsA("Frame") or obj:IsA("ImageLabel") then
@@ -2232,9 +2182,6 @@ local function setAntiFlash(enabled)
 end
 
 Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if states.Brightness then
-        watchBrightnessRoot(Workspace.CurrentCamera)
-    end
     if states.AntiFlash or states.DataCollector then
         local camera = Workspace.CurrentCamera
         watchFlashRoot(camera)
@@ -2334,10 +2281,7 @@ local function setInfiniteStamina(enabled)
     states.InfiniteStamina = enabled
 
     if enabled then
-        local found=findStaminaObjects()
-        if statusLabel then
-            statusLabel.Text="Estamina experimental: "..tostring(#found).." candidatos locais observados. O efeito real depende do servidor."
-        end
+        findStaminaObjects()
     else
         for obj,value in pairs(staminaOriginals) do
             if obj and obj.Parent then
@@ -2349,7 +2293,7 @@ local function setInfiniteStamina(enabled)
 end
 
 --==============================================================
--- V40 | ASSISTENTE IA: FILTROS, PULO ADAPTATIVO E VISIBILIDADE LOCAL
+-- V38 | ASSISTENTE IA: FILTROS DE DUTO/PAREDE, PULO ADAPTATIVO E OCULTAÇÃO VISUAL LOCAL
 --==============================================================
 local autoJumpGeneration=0
 local lastAutoJumpAt=0
@@ -2604,7 +2548,7 @@ local function setAutoJump(enabled)
 
                 -- Quando o jogador fica travado encostado no móvel, MoveDirection
                 -- pode cair para zero. Nesse caso usa a velocidade e, por último,
-                -- a direção frontal do personagem para continuar a assist\u00eancia.
+                -- a direção frontal do personagem para continuar a assistência.
                 -- Não usa a direção do olhar quando o jogador está parado:
                 -- isso causava pulos ao apenas encostar/raspar em paredes.
                 if directionVector.Magnitude<0.12 and horizontalVelocity.Magnitude>1.35 then
@@ -2735,7 +2679,7 @@ local function setAutoJump(enabled)
                         end
 
                         if states.DataCollector and (shouldJump or os.clock()-lastMovementReportAt>=0.9) then
-                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V40",
+                            queueReport({Event="MovementObstacleSnapshot",Assistant="Assistente IA V38",
                                 ObstacleName=obstacle.Name,ObstacleClass=obstacle.ClassName,
                                 ObstaclePath=safePath(obstacle),ObstaclePosition=tostring(bestHit.Position),
                                 ObstacleDistance=bestHit.Distance,ObstacleHeight=obstacleHeight,
@@ -2749,7 +2693,7 @@ local function setAutoJump(enabled)
                                 RetryCount=sameObstacleAttempts,
                                 MaxAssistObstacleHeight=MAX_ASSIST_OBSTACLE_HEIGHT,
                                 CapturedAt=os.date("!%Y-%m-%dT%H:%M:%SZ")},
-                                "MovementObstacleSnapshotV40|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
+                                "MovementObstacleSnapshotV38|"..safePath(obstacle).."|"..tostring(math.floor(os.clock()*2)))
                             lastMovementReportAt=os.clock()
                         end
                         end -- bestHit válido após filtros de duto
@@ -2762,7 +2706,7 @@ local function setAutoJump(enabled)
 
             if states.DataCollector and os.clock()-lastMovementReportAt>=5 then
                 lastMovementReportAt=os.clock()
-                movementAndVisibilitySnapshot("MovementPeriodicV40")
+                movementAndVisibilitySnapshot("MovementPeriodicV38")
             end
             task.wait(0.055)
         end
@@ -2841,7 +2785,7 @@ local function setAutoFarm(enabled)
 end
 
 --==============================================================
--- ASSISTENTE IA | CONTROLADOR CENTRAL
+-- ASSISTENTE A | CONTROLADOR CENTRAL
 --==============================================================
 
 local function setAssistant(enabled)
@@ -2894,7 +2838,7 @@ local function setAssistant(enabled)
         if toggleDrawers.AutoJump then toggleDrawers.AutoJump(false) end
         if toggleDrawers.PlayerInvisible then toggleDrawers.PlayerInvisible(false) end
         setESP("ESPPlayers",false); setESP("ESPMonsters",false); setESP("ESPDucts",false)
-        setDoors(false); setInstant(false); setAntiFlash(false); setBrightness(false)
+        setDoors(false); setInstant(false); setBrightness(false); setAntiFlash(false)
         setAutoFarm(false); setInfiniteStamina(false); setAutoJump(false); setPlayerInvisible(false)
         clearESP()
         statusLabel.Text="Assistente IA desligada | Todos os módulos subordinados foram bloqueados e desligados"
@@ -3222,7 +3166,7 @@ addToggle(pCollect,"Estamina Infinita","InfiniteStamina",setInfiniteStamina)
 
 -- DADOS
 addSection(pData,"COLETOR AUTOMÁTICO DA PARTIDA")
-addButton(pData,"V40: filtro de dutos no piso, raridades ampliadas e diagnóstico",function()
+addButton(pData,"V40: ESP de dutos e brilho persistente contra efeitos visuais",function()
     statusLabel.Text = "Cliente: coleta somente dados replicados/visíveis; valores do servidor não são acessíveis."
 end)
 
@@ -3344,7 +3288,7 @@ addButton(pData,"LIMPAR RELATÓRIO LOCAL",function()
 end)
 
 -- CONFIGURAÇÕES
-addSection(pConfig,"MODO STREAMER | LIMITAÇÃO TÉCNICA")
+addSection(pConfig,"MODO STREAMER | LIMITAÇÃO")
 local streamerInfo=Instance.new("TextLabel")
 streamerInfo.Size=UDim2.new(1,-8,0,82)
 streamerInfo.BackgroundTransparency=1
@@ -3353,12 +3297,8 @@ streamerInfo.TextWrapped=true
 streamerInfo.TextYAlignment=Enum.TextYAlignment.Top
 streamerInfo.Font=Enum.Font.Gotham
 streamerInfo.TextSize=11
-streamerInfo.Text="Um script cliente Roblox não consegue garantir que painel e ESP fiquem invisíveis somente na gravação/espelhamento enquanto continuam visíveis para você. Ocultar localmente também os esconderia da sua tela."
+streamerInfo.Text="Um script cliente não consegue garantir que painel e ESP fiquem invisíveis na gravação enquanto continuam visíveis para você. Ocultar localmente também esconderia os elementos da sua própria tela."
 streamerInfo.Parent=pConfig
-addButton(pConfig,"VER LIMITAÇÃO DO MODO STREAMER",function()
-    statusLabel.Text="Modo Streamer: ocultação seletiva na captura não é suportada de forma confiável por script cliente."
-    showPage("Configurações")
-end)
 
 addSection(pConfig,"DIAGNÓSTICO E CONFIGURAÇÕES")
 
@@ -3371,6 +3311,8 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
         "Resistência e Stamina são tratadas separadamente; a barra visual não prova o valor real.",
         "A coleta agora registra até 24 elementos da HUD para distinguir as duas barras.",
         "Valores controlados pelo servidor não podem ser garantidos por alteração local.",
+        "Teste automático de jogo: NÃO EXECUTADO (o script precisa ser testado dentro da partida).",
+        "Stamina infinita real: NÃO CONFIRMADA; valores locais não garantem alteração do estado no servidor.",
         "PlayerScripts.SprintStamina",
         "PlayerScripts.StaminaHUD",
         "PlayerScripts.EnergyDrink",
@@ -3417,9 +3359,7 @@ addButton(pConfig,"VERIFICAR CAMINHOS DE STAMINA",function()
     end
     table.insert(lines,"")
     table.insert(lines,"HoldEndStamina é observado, mas não é alterado: ainda não foi confirmado como estamina atual.")
-    table.insert(lines,"A barra HUD é somente visual; não prova o valor de stamina usado pelo servidor.")
-    table.insert(lines,"Teste automático dentro da partida: NÃO EXECUTADO.")
-    table.insert(lines,"Stamina infinita real: NÃO CONFIRMADA; valores locais não garantem alteração no servidor.")
+    table.insert(lines,"A barra HUD é somente visual; o botão só altera valores locais com nomes reconhecidos.")
 
     if #found==0 then
         table.insert(lines,"Nenhum objeto localizado.")
@@ -3584,8 +3524,8 @@ gui.Destroying:Connect(function()
 
     restoreDoors()
     setInstant(false)
-    setAntiFlash(false)
     setBrightness(false)
+    setAntiFlash(false)
     setInfiniteStamina(false)
     setAutoJump(false)
     setPlayerInvisible(false)
